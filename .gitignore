@@ -1,0 +1,32 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+.pub-cache/
+.pub/
+*.lock.bak
+# Nota: una APP sí versiona pubspec.lock (builds reproducibles). Se commitea tras
+# el primer `flutter pub get`.
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Android local
+android/local.properties
+android/.gradle/
+android/key.properties
+*.keystore
+*.jks
+
+# iOS / macOS
+ios/Pods/
+ios/.symlinks/
+**/Flutter/Generated.xcconfig
+**/Flutter/flutter_export_environment.sh
+
+# Misc
+.DS_Store
+*.log
