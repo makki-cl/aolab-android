@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'data/app_database.dart';
@@ -48,8 +49,15 @@ class AolabApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Aolab',
         debugShowCheckedModeBanner: false,
+        locale: const Locale('es'),
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: const [Locale('es'), Locale('en')],
         theme: ThemeData(
-          colorSchemeSeed: const Color(0xFF238ACC),
+          colorSchemeSeed: const Color(0xFF1A76B8),
           useMaterial3: true,
         ),
         // La UI raíz reacciona al estado de autenticación.
