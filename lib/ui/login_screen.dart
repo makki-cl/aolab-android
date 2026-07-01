@@ -49,11 +49,16 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const FlutterLogo(size: 64),
-                const SizedBox(height: 16),
-                Text('Aolab',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineMedium),
+                const Text(
+                  'AOLAB',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 40,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 4,
+                    color: Color(0xFF050450),
+                  ),
+                ),
                 const SizedBox(height: 24),
                 TextField(
                   controller: _email,

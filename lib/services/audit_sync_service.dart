@@ -3,17 +3,14 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../data/app_database.dart';
-import '../data/form_entry.dart';
+import '../models/audit.dart';
 import 'api_client.dart';
 
 enum SyncStatus { idle, syncing, offline, error }
 
-/// Sincronización offline-first contra la API:
-/// 1) PUSH: sube los registros locales con cambios pendientes (dirty).
-/// 2) PULL: baja los cambios del servidor con serverVersion > cursor (incluye
-///    tombstones) y los aplica al SQLite local.
-/// La UI siempre trabaja contra la base local; esto solo reconcilia con el servidor.
-class SyncService extends ChangeNotifier {
+/// Sincroniza auditorías offline-first:
+/// PUSH de las locales con cambios (dirty) y PULL de los cambios del servidor por cursor.
+class AuditSyncService extends ChangeNotifier {
   final AppDatabase db;
   final ApiClient api;
 
@@ -21,14 +18,13 @@ class SyncService extends ChangeNotifier {
   String? lastError;
   DateTime? lastSyncAt;
 
-  SyncService({required this.db, required this.api});
+  AuditSyncService({required this.db, required this.api});
 
   Future<bool> _isOnline() async {
-    final result = await Connectivity().checkConnectivity();
-    return !result.contains(ConnectivityResult.none);
+    final r = await Connectivity().checkConnectivity();
+    return !r.contains(ConnectivityResult.none);
   }
 
-  /// Ejecuta push + pull si hay conexión. Seguro de llamar a menudo.
   Future<void> sync() async {
     if (status == SyncStatus.syncing) return;
     if (!await _isOnline()) {
@@ -51,20 +47,15 @@ class SyncService extends ChangeNotifier {
   }
 
   Future<void> _push() async {
-    final pending = await db.dirtyEntries();
+    final pending = await db.dirtyAudits();
     if (pending.isEmpty) return;
-
-    final res = await api.dio.post('/api/sync/push', data: {
-      'entries': pending.map((e) => e.toDto()).toList(),
+    final res = await api.dio.post('/api/audits/push', data: {
+      'audits': pending.map((a) => a.toDto()).toList(),
     });
     final results = (res.data['results'] as List).cast<Map<String, dynamic>>();
-
     for (final r in results) {
-      final id = r['id'] as String;
-      final statusCode = r['status'] as int; // 0=Applied, 1=Conflict, 2=Rejected
-      final serverVersion = (r['serverVersion'] ?? 0) as int;
-      if (statusCode == 0) {
-        await db.markSynced(id, serverVersion);
+      if ((r['status'] as int) == 0) {
+        await db.markSynced(r['id'] as String, (r['serverVersion'] ?? 0) as int);
       }
       // Conflict/Rejected se resuelven en el pull siguiente (gana el servidor).
     }
@@ -74,13 +65,13 @@ class SyncService extends ChangeNotifier {
     var cursor = await db.getCursor();
     var hasMore = true;
     while (hasMore) {
-      final res = await api.dio.get('/api/sync/pull', queryParameters: {
+      final res = await api.dio.get('/api/audits/pull', queryParameters: {
         'cursor': cursor,
-        'pageSize': 200,
+        'pageSize': 100,
       });
-      final entries = (res.data['entries'] as List).cast<Map<String, dynamic>>();
-      for (final d in entries) {
-        await db.applyFromServer(FormEntry.fromDto(d));
+      final audits = (res.data['audits'] as List).cast<Map<String, dynamic>>();
+      for (final d in audits) {
+        await db.applyFromServer(Audit.fromDto(d));
       }
       cursor = (res.data['cursor'] ?? cursor) as int;
       hasMore = (res.data['hasMore'] ?? false) as bool;
