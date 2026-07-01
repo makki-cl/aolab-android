@@ -34,8 +34,17 @@ jobs:
       - name: Dependencias
         run: flutter pub get
 
-      - name: Compilar APK (release)
-        run: flutter build apk --release --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }}
+      - name: Ícono de la app (AO + badge TEST)
+        run: dart run flutter_launcher_icons
+
+      # Canal TEST: applicationId propio (convive con prod), nombre y servidor de test.
+      - name: Config canal TEST
+        run: |
+          sed -i -E 's/applicationId = "[^"]+"/applicationId = "cl.makki.aolab.test"/' android/app/build.gradle.kts
+          sed -i -E 's/android:label="[^"]+"/android:label="Aolab Test"/' android/app/src/main/AndroidManifest.xml
+
+      - name: Compilar APK (release, apunta a dev.aolab.cl)
+        run: flutter build apk --release --dart-define=AOLAB_API_BASE_URL=https://dev.aolab.cl --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }}
 
       # Firmamos con la llave de release (misma siempre) para que Obtainium/Android
       # puedan ACTUALIZAR la app entre versiones.
@@ -51,15 +60,15 @@ jobs:
           "$BUILD_TOOLS/apksigner" sign \
             --ks release.jks --ks-pass "pass:$KS_PASS" \
             --ks-key-alias "$KEY_ALIAS" --key-pass "pass:$KEY_PASS" \
-            --out "aolab-${{ github.run_number }}.apk" \
+            --out "aolab-test-${{ github.run_number }}.apk" \
             build/app/outputs/flutter-apk/app-release.apk
-          "$BUILD_TOOLS/apksigner" verify --print-certs "aolab-${{ github.run_number }}.apk"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "aolab-test-${{ github.run_number }}.apk"
           rm -f release.jks
 
       - name: Publicar Release (Obtainium lo lee de aquí)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: Aolab v1.0.${{ github.run_number }}
-          files: aolab-${{ github.run_number }}.apk
+          name: Aolab Test v1.0.${{ github.run_number }}
+          files: aolab-test-${{ github.run_number }}.apk
           generate_release_notes: true
