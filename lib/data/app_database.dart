@@ -2,12 +2,13 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import '../models/audit.dart';
+import '../models/master.dart';
 
 /// Almacenamiento local offline (SQLite). Fuente de verdad en el dispositivo:
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
 
   Database? _db;
 
@@ -20,15 +21,21 @@ class AppDatabase {
       version: _dbVersion,
       onCreate: (db, version) async {
         await _createAudits(db);
+        await _createMasters(db);
         await db.execute('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);');
       },
       onUpgrade: (db, oldV, newV) async {
         // Canal test: recreamos audits con el esquema nuevo y reseteamos el cursor
         // (las auditorías compartidas se vuelven a bajar del servidor).
-        await db.execute('DROP TABLE IF EXISTS audits;');
-        await _createAudits(db);
-        await db.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
-        await db.delete('kv', where: 'key = ?', whereArgs: ['pull_cursor']);
+        if (oldV < 2) {
+          await db.execute('DROP TABLE IF EXISTS audits;');
+          await _createAudits(db);
+          await db.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
+          await db.delete('kv', where: 'key = ?', whereArgs: ['pull_cursor']);
+        }
+        if (oldV < 3) {
+          await _createMasters(db);
+        }
       },
     );
   }
@@ -57,6 +64,65 @@ class AppDatabase {
     ''');
     await db.execute('CREATE INDEX idx_audits_dirty ON audits(dirty);');
   }
+
+  Future<void> _createMasters(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS clients (
+        id             TEXT PRIMARY KEY,
+        name           TEXT NOT NULL,
+        legal_id       TEXT,
+        has_logo       INTEGER NOT NULL DEFAULT 0,
+        is_active      INTEGER NOT NULL DEFAULT 1,
+        is_deleted     INTEGER NOT NULL DEFAULT 0,
+        server_version INTEGER NOT NULL DEFAULT 0
+      );
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS centers (
+        id              TEXT PRIMARY KEY,
+        name            TEXT NOT NULL,
+        code            TEXT,
+        latitude        REAL,
+        longitude       REAL,
+        owner_client_id TEXT,
+        operator_name   TEXT,
+        is_active       INTEGER NOT NULL DEFAULT 1,
+        is_deleted      INTEGER NOT NULL DEFAULT 0,
+        server_version  INTEGER NOT NULL DEFAULT 0
+      );
+    ''');
+  }
+
+  // ---- Maestros (clientes / centros) ----
+
+  Future<void> applyClientFromServer(ClientRef c) async {
+    final db = await database;
+    await db.insert('clients', c.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> applyCenterFromServer(CenterRef c) async {
+    final db = await database;
+    await db.insert('centers', c.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<ClientRef>> activeClients() async {
+    final db = await database;
+    final rows = await db.query('clients',
+        where: 'is_deleted = 0 AND is_active = 1', orderBy: 'name COLLATE NOCASE');
+    return rows.map(ClientRef.fromRow).toList();
+  }
+
+  Future<List<CenterRef>> activeCenters() async {
+    final db = await database;
+    final rows = await db.query('centers',
+        where: 'is_deleted = 0 AND is_active = 1', orderBy: 'name COLLATE NOCASE');
+    return rows.map(CenterRef.fromRow).toList();
+  }
+
+  Future<int> getClientCursor() async => int.tryParse(await getValue('client_cursor') ?? '0') ?? 0;
+  Future<void> setClientCursor(int v) async => setValue('client_cursor', '$v');
+  Future<int> getCenterCursor() async => int.tryParse(await getValue('center_cursor') ?? '0') ?? 0;
+  Future<void> setCenterCursor(int v) async => setValue('center_cursor', '$v');
 
   // ---- Auditorías ----
 

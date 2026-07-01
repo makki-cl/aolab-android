@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../data/app_database.dart';
 import '../models/audit.dart';
+import '../models/master.dart';
 import '../models/questionnaire.dart';
 import '../services/template_service.dart';
 
@@ -20,6 +21,8 @@ class AuditEditScreen extends StatefulWidget {
 class _AuditEditScreenState extends State<AuditEditScreen> {
   Audit? _audit;
   QuestionnaireTemplate? _tpl;
+  List<ClientRef> _clients = [];
+  List<CenterRef> _centers = [];
   bool _loading = true;
   Timer? _saveTimer;
   bool _saving = false;
@@ -37,9 +40,57 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   }
 
   Future<void> _load() async {
+    final db = context.read<AppDatabase>();
     _tpl = context.read<TemplateService>().template;
-    _audit = await context.read<AppDatabase>().findById(widget.auditId);
+    _audit = await db.findById(widget.auditId);
+    _clients = await db.activeClients();
+    _centers = await db.activeCenters();
     if (mounted) setState(() => _loading = false);
+  }
+
+  void _pickClient(String? id) {
+    final a = _audit!;
+    a.clientId = id;
+    a.clientName = id == null ? null : _clients.firstWhere((c) => c.id == id).name;
+    setState(() {});
+    _scheduleSave();
+  }
+
+  void _pickCenter(String? id) {
+    final a = _audit!;
+    a.centerId = id;
+    if (id != null) {
+      final c = _centers.firstWhere((x) => x.id == id);
+      a.centerName = c.name;
+      a.document.center.putIfAbsent('ID-01', () => Answer()).respuesta = c.name;
+    }
+    setState(() {});
+    _scheduleSave();
+  }
+
+  void _pickType(int? t) {
+    _audit!.type = t ?? 0;
+    setState(() {});
+    _scheduleSave();
+  }
+
+  Future<void> _pickDate() async {
+    final a = _audit!;
+    final base = (a.scheduledForUtc ?? a.sampledAtUtc ?? DateTime.now()).toLocal();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: base,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    final utc = DateTime.utc(picked.year, picked.month, picked.day, 12);
+    a.sampledAtUtc = utc;
+    if (a.statusEnum == AuditStatus.scheduled) a.scheduledForUtc = utc;
+    a.document.center.putIfAbsent('ID-03', () => Answer()).respuesta =
+        '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+    setState(() {});
+    _scheduleSave();
   }
 
   bool get _locked => _audit?.isLocked ?? false;
@@ -155,6 +206,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
               ),
             ),
 
+          _headerCard(a),
+
           for (final sec in _tpl!.centerSections)
             Card(
               margin: const EdgeInsets.only(bottom: 8),
@@ -222,6 +275,90 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
             ),
           const SizedBox(height: 40),
         ],
+      ),
+    );
+  }
+
+  Widget _headerCard(Audit a) {
+    final date = a.scheduledForUtc ?? a.sampledAtUtc;
+    final dateStr = date != null
+        ? '${date.toLocal().day.toString().padLeft(2, '0')}-${date.toLocal().month.toString().padLeft(2, '0')}-${date.toLocal().year}'
+        : 'Sin fecha';
+
+    if (_locked) {
+      return Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Cliente: ${a.clientName ?? '—'}'),
+              Text('Centro: ${a.centerName}'),
+              Text('Tipo: ${a.typeEnum.label} · Fecha: $dateStr'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final clientVal = _clients.any((c) => c.id == a.clientId) ? a.clientId : null;
+    final centerVal = _centers.any((c) => c.id == a.centerId) ? a.centerId : null;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: Column(
+          children: [
+            DropdownButtonFormField<String?>(
+              value: clientVal,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Cliente', isDense: true),
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('— Sin cliente —')),
+                for (final c in _clients) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+              ],
+              onChanged: _pickClient,
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String?>(
+              value: centerVal,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Centro', isDense: true),
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('— Sin centro —')),
+                for (final c in _centers) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+              ],
+              onChanged: _pickCenter,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    value: a.type,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Tipo', isDense: true),
+                    items: const [
+                      DropdownMenuItem(value: 0, child: Text('Spot')),
+                      DropdownMenuItem(value: 1, child: Text('Seguimiento')),
+                    ],
+                    onChanged: _pickType,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _pickDate,
+                    icon: const Icon(Icons.event, size: 18),
+                    label: Text(dateStr),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

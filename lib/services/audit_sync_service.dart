@@ -5,20 +5,23 @@ import 'package:flutter/foundation.dart';
 import '../data/app_database.dart';
 import '../models/audit.dart';
 import 'api_client.dart';
+import 'master_sync_service.dart';
 
 enum SyncStatus { idle, syncing, offline, error }
 
 /// Sincroniza auditorías offline-first:
 /// PUSH de las locales con cambios (dirty) y PULL de los cambios del servidor por cursor.
+/// También refresca los maestros (clientes/centros) en el mismo ciclo.
 class AuditSyncService extends ChangeNotifier {
   final AppDatabase db;
   final ApiClient api;
+  final MasterSyncService masters;
 
   SyncStatus status = SyncStatus.idle;
   String? lastError;
   DateTime? lastSyncAt;
 
-  AuditSyncService({required this.db, required this.api});
+  AuditSyncService({required this.db, required this.api, required this.masters});
 
   Future<bool> _isOnline() async {
     final r = await Connectivity().checkConnectivity();
@@ -35,6 +38,7 @@ class AuditSyncService extends ChangeNotifier {
     try {
       await _push();
       await _pull();
+      await masters.pull(); // refresca clientes/centros para los selectores
       lastSyncAt = DateTime.now();
       _set(SyncStatus.idle);
     } on DioException catch (e) {
