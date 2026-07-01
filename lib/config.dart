@@ -12,4 +12,9 @@ class AppConfig {
     'AOLAB_API_BASE_URL',
     defaultValue: 'http://10.0.2.2:5080',
   );
+
+  /// Client ID WEB de Google (se usa como serverClientId para que el idToken tenga
+  /// esa audiencia; el backend lo valida contra este mismo valor).
+  static const String googleWebClientId =
+      '923475534238-4dend2rqndcm1b7hbaol2nr82vfpsk91.apps.googleusercontent.com';
 }
