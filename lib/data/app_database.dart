@@ -7,7 +7,7 @@ import '../models/audit.dart';
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   Database? _db;
 
@@ -19,25 +19,43 @@ class AppDatabase {
       path,
       version: _dbVersion,
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE audits (
-            id             TEXT PRIMARY KEY,
-            status         INTEGER NOT NULL DEFAULT 0,
-            center_name    TEXT NOT NULL,
-            auditor        TEXT,
-            sampled_at     TEXT,
-            document       TEXT NOT NULL,
-            created_at     TEXT NOT NULL,
-            updated_at     TEXT NOT NULL,
-            is_deleted     INTEGER NOT NULL DEFAULT 0,
-            server_version INTEGER NOT NULL DEFAULT 0,
-            dirty          INTEGER NOT NULL DEFAULT 1
-          );
-        ''');
-        await db.execute('CREATE INDEX idx_audits_dirty ON audits(dirty);');
+        await _createAudits(db);
         await db.execute('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);');
       },
+      onUpgrade: (db, oldV, newV) async {
+        // Canal test: recreamos audits con el esquema nuevo y reseteamos el cursor
+        // (las auditorías compartidas se vuelven a bajar del servidor).
+        await db.execute('DROP TABLE IF EXISTS audits;');
+        await _createAudits(db);
+        await db.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);");
+        await db.delete('kv', where: 'key = ?', whereArgs: ['pull_cursor']);
+      },
     );
+  }
+
+  Future<void> _createAudits(Database db) async {
+    await db.execute('''
+      CREATE TABLE audits (
+        id              TEXT PRIMARY KEY,
+        status          INTEGER NOT NULL DEFAULT 0,
+        type            INTEGER NOT NULL DEFAULT 0,
+        center_name     TEXT NOT NULL,
+        auditor         TEXT,
+        sampled_at      TEXT,
+        center_id       TEXT,
+        client_id       TEXT,
+        client_name     TEXT,
+        created_by_name TEXT,
+        scheduled_for   TEXT,
+        document        TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        is_deleted      INTEGER NOT NULL DEFAULT 0,
+        server_version  INTEGER NOT NULL DEFAULT 0,
+        dirty           INTEGER NOT NULL DEFAULT 1
+      );
+    ''');
+    await db.execute('CREATE INDEX idx_audits_dirty ON audits(dirty);');
   }
 
   // ---- Auditorías ----

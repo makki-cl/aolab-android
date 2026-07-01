@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
@@ -19,11 +21,19 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   Audit? _audit;
   QuestionnaireTemplate? _tpl;
   bool _loading = true;
+  Timer? _saveTimer;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _saveTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -32,38 +42,61 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  bool get _locked => _audit?.isLocked ?? false;
+
   Answer _centerAns(String code) => _audit!.document.center.putIfAbsent(code, () => Answer());
   Answer _salaAns(AuditSala s, String code) => s.answers.putIfAbsent(code, () => Answer());
 
-  void _addSala() {
-    setState(() {
-      final n = _audit!.document.salas.length + 1;
-      _audit!.document.salas.add(AuditSala(id: const Uuid().v4(), name: 'Sala $n'));
-    });
+  // ── Auto-guardado local inmediato (debounce corto) ──
+  void _scheduleSave() {
+    if (_locked) return;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 500), _saveNow);
+    if (!_saving) setState(() => _saving = true);
   }
 
-  void _removeSala(AuditSala s) => setState(() => _audit!.document.salas.remove(s));
-
-  Future<void> _save({int? newStatus}) async {
-    final a = _audit!;
+  Future<void> _saveNow() async {
+    final a = _audit;
+    if (a == null || _locked) return;
     final c = a.document.center;
     String? val(String code) {
       final r = c[code]?.respuesta?.trim();
       return (r == null || r.isEmpty) ? null : r;
     }
 
-    a.centerName = val('ID-01') ?? '(sin nombre)';
-    a.auditor = val('ID-04');
-    a.sampledAtUtc = DateTime.tryParse(c['ID-03']?.respuesta ?? '');
-    if (newStatus != null) a.status = newStatus;
+    // Denormaliza la cabecera desde IDENTIFICACIÓN si no vino del maestro.
+    if (a.centerId == null) a.centerName = val('ID-01') ?? a.centerName;
+    a.auditor ??= val('ID-04');
+    a.sampledAtUtc ??= DateTime.tryParse(c['ID-03']?.respuesta ?? '');
     a.updatedAtUtc = DateTime.now().toUtc();
 
+    await context.read<AppDatabase>().upsertLocal(a); // marca dirty
+    if (mounted) setState(() => _saving = false);
+  }
+
+  void _addSala() {
+    setState(() {
+      final n = _audit!.document.salas.length + 1;
+      _audit!.document.salas.add(AuditSala(id: const Uuid().v4(), name: 'Sala $n'));
+    });
+    _scheduleSave();
+  }
+
+  void _removeSala(AuditSala s) {
+    setState(() => _audit!.document.salas.remove(s));
+    _scheduleSave();
+  }
+
+  Future<void> _setStatus(int newStatus, String msg) async {
+    _saveTimer?.cancel();
+    final a = _audit!;
+    await _saveNow();
+    a.status = newStatus;
+    a.updatedAtUtc = DateTime.now().toUtc();
     await context.read<AppDatabase>().upsertLocal(a);
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(newStatus == AuditStatus.submitted.value ? 'Auditoría enviada' : 'Guardada')),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -83,20 +116,45 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     }
 
     final a = _audit!;
+    final date = a.scheduledForUtc ?? a.sampledAtUtc;
+    final title = date != null
+        ? '${a.centerName} · ${date.toLocal().day.toString().padLeft(2, '0')}-${date.toLocal().month.toString().padLeft(2, '0')}-${date.toLocal().year}'
+        : a.centerName;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(a.centerName),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontSize: 16)),
+            Text('${a.clientName ?? 'Sin cliente'} · ${a.statusEnum.label}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal)),
+          ],
+        ),
         actions: [
-          IconButton(tooltip: 'Guardar', onPressed: () => _save(), icon: const Icon(Icons.save)),
+          if (_locked)
+            const Padding(padding: EdgeInsets.only(right: 12), child: Icon(Icons.lock_outline))
+          else
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(child: Text(_saving ? 'Guardando…' : 'Guardado',
+                  style: const TextStyle(fontSize: 12))),
+            ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          Text(a.statusEnum.label, style: TextStyle(color: Colors.grey.shade600)),
-          const SizedBox(height: 8),
+          if (_locked)
+            const Card(
+              color: Color(0xFFEFF3F6),
+              child: ListTile(
+                leading: Icon(Icons.lock_outline),
+                title: Text('Auditoría finalizada'),
+                subtitle: Text('Los datos quedan fijos (solo lectura).'),
+              ),
+            ),
 
-          // ── Secciones de CENTRO ──
           for (final sec in _tpl!.centerSections)
             Card(
               margin: const EdgeInsets.only(bottom: 8),
@@ -114,11 +172,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
               Text('Salas (${a.document.salas.length})',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const Spacer(),
-              TextButton.icon(onPressed: _addSala, icon: const Icon(Icons.add_business), label: const Text('Agregar sala')),
+              if (!_locked)
+                TextButton.icon(onPressed: _addSala, icon: const Icon(Icons.add_business), label: const Text('Agregar sala')),
             ],
           ),
 
-          // ── SALAS (repetibles) ──
           for (final sala in a.document.salas)
             Card(
               margin: const EdgeInsets.only(bottom: 12),
@@ -129,10 +187,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
                     title: TextFormField(
                       key: ValueKey('salaname-${sala.id}'),
                       initialValue: sala.name,
+                      readOnly: _locked,
                       decoration: const InputDecoration(labelText: 'Nombre de la sala', border: InputBorder.none),
-                      onChanged: (v) => sala.name = v,
+                      onChanged: (v) { sala.name = v; _scheduleSave(); },
                     ),
-                    trailing: IconButton(
+                    trailing: _locked ? null : IconButton(
                       icon: const Icon(Icons.delete_outline, color: Colors.red),
                       onPressed: () => _removeSala(sala),
                     ),
@@ -148,11 +207,18 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
             ),
 
           const SizedBox(height: 16),
-          if (a.statusEnum == AuditStatus.draft)
+          if (a.statusEnum == AuditStatus.scheduled)
             FilledButton.icon(
-              onPressed: () => _save(newStatus: AuditStatus.submitted.value),
-              icon: const Icon(Icons.send),
-              label: const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Text('Enviar auditoría')),
+              onPressed: () => _setStatus(AuditStatus.draft.value, 'Auditoría iniciada'),
+              icon: const Icon(Icons.play_arrow),
+              label: const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Text('Iniciar auditoría')),
+            )
+          else if (a.statusEnum == AuditStatus.draft)
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () => _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada'),
+              icon: const Icon(Icons.check_circle),
+              label: const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Text('Finalizar auditoría')),
             ),
           const SizedBox(height: 40),
         ],
@@ -175,21 +241,23 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
           TextFormField(
             key: ValueKey('$scope-${q.code}-r'),
             initialValue: a.respuesta,
+            readOnly: _locked,
             minLines: 1,
             maxLines: 4,
             decoration: const InputDecoration(labelText: 'Respuesta', border: OutlineInputBorder(), isDense: true),
-            onChanged: (v) => a.respuesta = v,
+            onChanged: (v) { a.respuesta = v; _scheduleSave(); },
           ),
           const SizedBox(height: 6),
           TextFormField(
             key: ValueKey('$scope-${q.code}-c'),
             initialValue: a.comentario,
+            readOnly: _locked,
             decoration: const InputDecoration(
               labelText: 'Comentario (opcional)',
               prefixIcon: Icon(Icons.comment_outlined, size: 18),
               isDense: true,
             ),
-            onChanged: (v) => a.comentario = v,
+            onChanged: (v) { a.comentario = v; _scheduleSave(); },
           ),
         ],
       ),

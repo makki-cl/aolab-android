@@ -113,9 +113,14 @@ class _AuditListScreenState extends State<AuditListScreen> {
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (_, i) {
                         final a = _audits[i];
+                        final date = a.scheduledForUtc ?? a.sampledAtUtc;
+                        final dateStr = date != null
+                            ? '${date.toLocal().day.toString().padLeft(2, '0')}-${date.toLocal().month.toString().padLeft(2, '0')}-${date.toLocal().year}'
+                            : 'sin fecha';
                         return ListTile(
-                          title: Text(a.centerName),
-                          subtitle: Text('${a.statusEnum.label} · ${a.document.salas.length} sala(s)'),
+                          leading: _StatusChip(a.statusEnum),
+                          title: Text('${a.clientName ?? 'Sin cliente'} · ${a.centerName}'),
+                          subtitle: Text('$dateStr · ${a.auditor ?? 'sin auditor'} · ${a.typeEnum.label}'),
                           trailing: a.dirty
                               ? const Icon(Icons.cloud_upload_outlined, size: 18, color: Colors.orange)
                               : const Icon(Icons.cloud_done_outlined, size: 18, color: Colors.green),
@@ -124,6 +129,40 @@ class _AuditListScreenState extends State<AuditListScreen> {
                       },
                     ),
             ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final AuditStatus status;
+  const _StatusChip(this.status);
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (status) {
+      AuditStatus.scheduled => Colors.blue,
+      AuditStatus.draft => Colors.orange,
+      AuditStatus.submitted => Colors.green,
+      AuditStatus.reviewed => Colors.teal,
+    };
+    return Container(
+      width: 44,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Icon(
+        switch (status) {
+          AuditStatus.scheduled => Icons.event,
+          AuditStatus.draft => Icons.edit_note,
+          AuditStatus.submitted => Icons.lock_outline,
+          AuditStatus.reviewed => Icons.verified_outlined,
+        },
+        color: color,
+        size: 20,
+      ),
     );
   }
 }
