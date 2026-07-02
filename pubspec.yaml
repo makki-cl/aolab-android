@@ -27,6 +27,9 @@ dependencies:
   # Detección de conectividad para el sync
   connectivity_plus: ^6.1.0
 
+  # Versión de la app (para la correlación de versión Web↔App)
+  package_info_plus: ^8.0.0
+
   # Estado e identificadores
   provider: ^6.1.2
   uuid: ^4.5.1

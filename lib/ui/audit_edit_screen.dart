@@ -128,7 +128,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
       builder: (_) => AlertDialog(
         icon: const Icon(Icons.delete_outline, color: Colors.red),
         title: const Text('Eliminar sala'),
-        content: Text('¿Eliminar la sala «${s.name.isEmpty ? 'Sala' : s.name}»? Si fue por accidente, podrás recuperarla desde «Salas eliminadas».'),
+        content: Text('¿Eliminar la sala «${s.name.isEmpty ? 'Sala' : s.name}»?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(
@@ -196,7 +196,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   Color _badgeColor(String code) {
     switch (code.split('-').first) {
       case 'ID': return const Color(0xFF3949AB);
-      case 'AF': return const Color(0xFF1A76B8);
+      case 'AF': return const Color(0xFF2D58FF);
       case 'IN': return const Color(0xFF1C7293);
       case 'PR': return const Color(0xFFC2410C);
       case 'HI': return const Color(0xFF0891B2);

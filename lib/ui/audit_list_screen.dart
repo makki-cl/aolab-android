@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
@@ -20,6 +21,8 @@ class _AuditListScreenState extends State<AuditListScreen> {
   List<Audit> _audits = [];
   int _pending = 0;
   bool _loading = true;
+  bool _outdated = false;
+  String _outdatedMsg = '';
 
   @override
   void initState() {
@@ -31,6 +34,23 @@ class _AuditListScreenState extends State<AuditListScreen> {
     await context.read<TemplateService>().load(); // plantilla (cache + red)
     await _reload();
     if (mounted) _sync();
+    _checkVersion();
+  }
+
+  // Correlación de versión Web↔App: si el build es menor al mínimo del servidor, avisa.
+  Future<void> _checkVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final build = int.tryParse(info.buildNumber) ?? 0;
+      final res = await context.read<AuthService>().api.dio.get('/api/app/version');
+      final minBuild = (res.data['minBuild'] ?? 0) as int;
+      if (build < minBuild && mounted) {
+        setState(() {
+          _outdated = true;
+          _outdatedMsg = (res.data['message'] ?? 'Tu aplicación está desactualizada. Actualízala.') as String;
+        });
+      }
+    } catch (_) {/* sin red o error: no bloquear */}
   }
 
   Future<void> _reload() async {
@@ -101,7 +121,25 @@ class _AuditListScreenState extends State<AuditListScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
+          : Column(children: [
+              if (_outdated)
+                Material(
+                  color: const Color(0xFFD13438),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Row(children: [
+                      const Icon(Icons.system_update, color: Colors.white, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(_outdatedMsg, style: const TextStyle(color: Colors.white, fontSize: 13))),
+                    ]),
+                  ),
+                ),
+              Expanded(child: _body()),
+            ]),
+    );
+  }
+
+  Widget _body() => RefreshIndicator(
               onRefresh: _sync,
               child: _audits.isEmpty
                   ? ListView(children: const [
@@ -128,9 +166,7 @@ class _AuditListScreenState extends State<AuditListScreen> {
                         );
                       },
                     ),
-            ),
-    );
-  }
+          );
 }
 
 class _StatusChip extends StatelessWidget {

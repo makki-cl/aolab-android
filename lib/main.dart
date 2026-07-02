@@ -57,7 +57,7 @@ class AolabApp extends StatelessWidget {
         ],
         supportedLocales: const [Locale('es'), Locale('en')],
         theme: ThemeData(
-          colorSchemeSeed: const Color(0xFF1A76B8),
+          colorSchemeSeed: const Color(0xFF2D58FF),
           useMaterial3: true,
         ),
         // La UI raíz reacciona al estado de autenticación.
