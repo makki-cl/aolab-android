@@ -36,13 +36,17 @@ extension AuditTypeX on AuditType {
 class Answer {
   String? respuesta;
   String? comentario;
+  String? titulo; // solo para "consultas adicionales" agregadas en la web
 
-  Answer({this.respuesta, this.comentario});
+  Answer({this.respuesta, this.comentario, this.titulo});
 
-  Map<String, dynamic> toJson() => {'respuesta': respuesta, 'comentario': comentario};
+  Map<String, dynamic> toJson() => {'respuesta': respuesta, 'comentario': comentario, 'titulo': titulo};
 
-  factory Answer.fromJson(Map<String, dynamic> j) =>
-      Answer(respuesta: j['respuesta'] as String?, comentario: j['comentario'] as String?);
+  factory Answer.fromJson(Map<String, dynamic> j) => Answer(
+        respuesta: j['respuesta'] as String?,
+        comentario: j['comentario'] as String?,
+        titulo: j['titulo'] as String?,
+      );
 }
 
 /// Una sala evaluada dentro del centro.
