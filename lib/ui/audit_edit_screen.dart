@@ -23,6 +23,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   QuestionnaireTemplate? _tpl;
   List<ClientRef> _clients = [];
   List<CenterRef> _centers = [];
+  List<UserRef> _users = [];
   bool _loading = true;
   Timer? _saveTimer;
   bool _saving = false;
@@ -46,6 +47,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     _audit = await db.findById(widget.auditId);
     _clients = await db.activeClients();
     _centers = await db.activeCenters();
+    _users = await db.allUsers();
     if (mounted) setState(() => _loading = false);
   }
 
@@ -92,6 +94,12 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
 
   void _pickType(int? t) {
     _audit!.type = t ?? 0;
+    setState(() {});
+    _scheduleSave();
+  }
+
+  void _pickAuditor(String? display) {
+    _audit!.auditor = display; // se guarda el nombre a mostrar
     setState(() {});
     _scheduleSave();
   }
@@ -349,19 +357,27 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     final centerVal = _centers.any((c) => c.id == a.centerId) ? a.centerId : null;
     final jefe = _ans(a.document.center, 'ID-02');
 
+    final auditorVal = _users.any((u) => u.display == a.auditor) ? a.auditor : null;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: idc.withValues(alpha: 0.5), width: 2),
+        side: BorderSide(color: idc.withValues(alpha: 0.4)),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _badge('IDENTIFICACIÓN', idc),
-            const SizedBox(height: 10),
+      child: Container(
+        decoration: BoxDecoration(border: Border(left: BorderSide(color: idc, width: 4))),
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            initiallyExpanded: true,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+            childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            title: _badge('IDENTIFICACIÓN', idc),
+            children: [
             // Tipo de auditoría
             _labeled(null, 'Tipo de auditoría',
                 DropdownButtonFormField<int>(
@@ -386,16 +402,31 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
                     for (final c in _clients) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
                   ],
                 )),
-            // Auditor (solo lectura en el celular)
+            // Auditor (desde los usuarios del sistema)
             _labeled('ID-04', 'Auditor',
-                InputDecorator(decoration: _dec(), child: Text(a.auditor ?? '—'))),
+                DropdownButtonFormField<String?>(
+                  value: auditorVal,
+                  isExpanded: true,
+                  decoration: _dec(),
+                  onChanged: _locked ? null : _pickAuditor,
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('— Sin auditor —')),
+                    for (final u in _users) DropdownMenuItem<String?>(value: u.display, child: Text(u.display)),
+                  ],
+                )),
             // Fecha
             _labeled('ID-03', 'Fecha de auditoría',
-                OutlinedButton.icon(
-                  onPressed: _locked ? null : _pickDate,
-                  icon: const Icon(Icons.event, size: 18),
-                  label: Align(alignment: Alignment.centerLeft, child: Text(dateStr)),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                InkWell(
+                  onTap: _locked ? null : _pickDate,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InputDecorator(
+                    decoration: _dec(),
+                    child: Row(children: [
+                      Icon(Icons.event, size: 18, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text(dateStr),
+                    ]),
+                  ),
                 )),
             // Centro
             _labeled('ID-01', 'Centro',
@@ -418,13 +449,17 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
                   decoration: _dec(),
                   onChanged: (v) { jefe.respuesta = v; _scheduleSave(); },
                 )),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  InputDecoration _dec() => const InputDecoration(isDense: true, border: OutlineInputBorder());
+  InputDecoration _dec() => InputDecoration(
+        isDense: true,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      );
 
   Widget _labeled(String? code, String label, Widget field) => Padding(
         padding: const EdgeInsets.only(bottom: 12),
@@ -460,14 +495,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
         ],
       ),
     );
-    return Container(
-      margin: EdgeInsets.only(bottom: nested ? 6 : 8),
-      decoration: BoxDecoration(
-        border: Border(left: BorderSide(color: c.withValues(alpha: 0.7), width: 3)),
+    return Card(
+      margin: EdgeInsets.only(bottom: nested ? 8 : 10),
+      clipBehavior: Clip.antiAlias, // clippea el acento al borde redondeado
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        decoration: BoxDecoration(border: Border(left: BorderSide(color: c, width: 4))),
+        child: tile,
       ),
-      child: nested
-          ? tile
-          : Card(margin: EdgeInsets.zero, clipBehavior: Clip.antiAlias, child: tile),
     );
   }
 

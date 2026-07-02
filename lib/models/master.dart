@@ -1,5 +1,27 @@
 /// Maestros read-only sincronizados desde la web (solo pull). Se usan para poblar
-/// los selectores de cliente/centro al crear/editar una auditoría en terreno.
+/// los selectores de cliente/centro/auditor al crear/editar una auditoría en terreno.
+
+/// Usuario del sistema (para elegir auditor).
+class UserRef {
+  final String id;
+  final String email;
+  final String? fullName;
+
+  UserRef({required this.id, required this.email, this.fullName});
+
+  String get display => (fullName != null && fullName!.trim().isNotEmpty) ? fullName! : email;
+
+  Map<String, Object?> toRow() => {'id': id, 'email': email, 'full_name': fullName};
+
+  factory UserRef.fromRow(Map<String, Object?> r) =>
+      UserRef(id: r['id'] as String, email: (r['email'] ?? '') as String, fullName: r['full_name'] as String?);
+
+  factory UserRef.fromDto(Map<String, dynamic> d) => UserRef(
+        id: (d['id'] ?? '') as String,
+        email: (d['email'] ?? '') as String,
+        fullName: d['fullName'] as String?,
+      );
+}
 
 class ClientRef {
   final String id;

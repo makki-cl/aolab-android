@@ -8,7 +8,7 @@ import '../models/master.dart';
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 3;
+  static const _dbVersion = 4;
 
   Database? _db;
 
@@ -22,6 +22,7 @@ class AppDatabase {
       onCreate: (db, version) async {
         await _createAudits(db);
         await _createMasters(db);
+        await _createUsers(db);
         await db.execute('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);');
       },
       onUpgrade: (db, oldV, newV) async {
@@ -35,6 +36,9 @@ class AppDatabase {
         }
         if (oldV < 3) {
           await _createMasters(db);
+        }
+        if (oldV < 4) {
+          await _createUsers(db);
         }
       },
     );
@@ -91,6 +95,35 @@ class AppDatabase {
         server_version  INTEGER NOT NULL DEFAULT 0
       );
     ''');
+  }
+
+  Future<void> _createUsers(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS users (
+        id        TEXT PRIMARY KEY,
+        email     TEXT NOT NULL,
+        full_name TEXT
+      );
+    ''');
+  }
+
+  // ---- Usuarios (para elegir auditor) ----
+
+  /// Reemplaza la lista local de usuarios por la del servidor.
+  Future<void> replaceUsers(List<UserRef> users) async {
+    final db = await database;
+    final batch = db.batch();
+    batch.delete('users');
+    for (final u in users) {
+      batch.insert('users', u.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<List<UserRef>> allUsers() async {
+    final db = await database;
+    final rows = await db.query('users', orderBy: 'coalesce(full_name, email) COLLATE NOCASE');
+    return rows.map(UserRef.fromRow).toList();
   }
 
   // ---- Maestros (clientes / centros) ----

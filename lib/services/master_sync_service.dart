@@ -13,6 +13,14 @@ class MasterSyncService {
   Future<void> pull() async {
     await _pullClients();
     await _pullCenters();
+    await _pullUsers();
+  }
+
+  // Usuarios: lista chica, se reemplaza completa (sin cursor).
+  Future<void> _pullUsers() async {
+    final res = await api.dio.get('/api/masters/users');
+    final list = (res.data as List).cast<Map<String, dynamic>>();
+    await db.replaceUsers(list.map(UserRef.fromDto).toList());
   }
 
   Future<void> _pullClients() async {
