@@ -53,20 +53,23 @@ class Answer {
 class AuditSala {
   String id;
   String name;
+  bool isDeleted; // soft-delete recuperable
   Map<String, Answer> answers;
 
-  AuditSala({required this.id, this.name = '', Map<String, Answer>? answers})
+  AuditSala({required this.id, this.name = '', this.isDeleted = false, Map<String, Answer>? answers})
       : answers = answers ?? {};
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        'isDeleted': isDeleted,
         'answers': answers.map((k, v) => MapEntry(k, v.toJson())),
       };
 
   factory AuditSala.fromJson(Map<String, dynamic> j) => AuditSala(
         id: (j['id'] ?? '') as String,
         name: (j['name'] ?? '') as String,
+        isDeleted: (j['isDeleted'] ?? false) as bool,
         answers: ((j['answers'] ?? {}) as Map<String, dynamic>)
             .map((k, v) => MapEntry(k, Answer.fromJson((v ?? {}) as Map<String, dynamic>))),
       );

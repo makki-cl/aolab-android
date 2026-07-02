@@ -116,14 +116,36 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   // ── Salas ──
   void _addSala() {
     setState(() {
-      final n = _audit!.document.salas.length + 1;
+      final n = _audit!.document.salas.where((s) => !s.isDeleted).length + 1;
       _audit!.document.salas.add(AuditSala(id: const Uuid().v4(), name: 'Sala $n'));
     });
     _scheduleSave();
   }
 
-  void _removeSala(AuditSala s) {
-    setState(() => _audit!.document.salas.remove(s));
+  Future<void> _removeSala(AuditSala s) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        icon: const Icon(Icons.delete_outline, color: Colors.red),
+        title: const Text('Eliminar sala'),
+        content: Text('¿Eliminar la sala «${s.name.isEmpty ? 'Sala' : s.name}»? Si fue por accidente, podrás recuperarla desde «Salas eliminadas».'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => s.isDeleted = true); // soft-delete recuperable
+    _scheduleSave();
+  }
+
+  void _restoreSala(AuditSala s) {
+    setState(() => s.isDeleted = false);
     _scheduleSave();
   }
 
@@ -261,7 +283,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
           const SizedBox(height: 8),
           Row(
             children: [
-              Text('Salas (${a.document.salas.length})',
+              Text('Salas (${a.document.salas.where((s) => !s.isDeleted).length})',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const Spacer(),
               if (!_locked)
@@ -269,7 +291,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
             ],
           ),
 
-          for (final sala in a.document.salas) _salaCard(sala),
+          for (final sala in a.document.salas.where((s) => !s.isDeleted)) _salaCard(sala),
+
+          _deletedSalas(a),
 
           const SizedBox(height: 16),
           if (a.statusEnum == AuditStatus.scheduled)
@@ -444,6 +468,39 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
       child: nested
           ? tile
           : Card(margin: EdgeInsets.zero, clipBehavior: Clip.antiAlias, child: tile),
+    );
+  }
+
+  // ── Papelera de salas (recuperación de borrado accidental) ──
+  Widget _deletedSalas(Audit a) {
+    final deleted = a.document.salas.where((s) => s.isDeleted).toList();
+    if (deleted.isEmpty || _locked) return const SizedBox.shrink();
+    return Card(
+      margin: const EdgeInsets.only(top: 6, bottom: 12),
+      color: const Color(0xFFF4F6F8),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          leading: const Icon(Icons.delete_outline),
+          title: Text('Salas eliminadas (${deleted.length})',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          children: [
+            for (final sala in deleted)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.warehouse_outlined, size: 20),
+                title: Text(sala.name.isEmpty ? 'Sala' : sala.name),
+                trailing: TextButton.icon(
+                  icon: const Icon(Icons.restore_from_trash, size: 18),
+                  label: const Text('Restaurar'),
+                  onPressed: () => _restoreSala(sala),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
