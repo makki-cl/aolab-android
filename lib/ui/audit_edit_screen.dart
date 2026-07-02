@@ -26,6 +26,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   bool _loading = true;
   Timer? _saveTimer;
   bool _saving = false;
+  final Set<Answer> _showComment = {};
 
   @override
   void initState() {
@@ -48,6 +49,31 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  bool get _locked => _audit?.isLocked ?? false;
+
+  // Secciones de centro SIN IDENTIFICACIÓN (esa vive en la cabecera).
+  List<TemplateSection> get _centerSections =>
+      _tpl!.centerSections.where((s) => s.code != 'IDENTIFICACION').toList();
+
+  Answer _ans(Map<String, Answer> map, String code) => map.putIfAbsent(code, () => Answer());
+
+  // ── Auto-guardado local inmediato (debounce corto) ──
+  void _scheduleSave() {
+    if (_locked) return;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 500), _saveNow);
+    if (!_saving) setState(() => _saving = true);
+  }
+
+  Future<void> _saveNow() async {
+    final a = _audit;
+    if (a == null || _locked) return;
+    a.updatedAtUtc = DateTime.now().toUtc();
+    await context.read<AppDatabase>().upsertLocal(a);
+    if (mounted) setState(() => _saving = false);
+  }
+
+  // ── Cabecera ──
   void _pickClient(String? id) {
     final a = _audit!;
     a.clientId = id;
@@ -59,11 +85,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   void _pickCenter(String? id) {
     final a = _audit!;
     a.centerId = id;
-    if (id != null) {
-      final c = _centers.firstWhere((x) => x.id == id);
-      a.centerName = c.name;
-      a.document.center.putIfAbsent('ID-01', () => Answer()).respuesta = c.name;
-    }
+    if (id != null) a.centerName = _centers.firstWhere((x) => x.id == id).name;
     setState(() {});
     _scheduleSave();
   }
@@ -87,44 +109,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     final utc = DateTime.utc(picked.year, picked.month, picked.day, 12);
     a.sampledAtUtc = utc;
     if (a.statusEnum == AuditStatus.scheduled) a.scheduledForUtc = utc;
-    a.document.center.putIfAbsent('ID-03', () => Answer()).respuesta =
-        '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
     setState(() {});
     _scheduleSave();
   }
 
-  bool get _locked => _audit?.isLocked ?? false;
-
-  Answer _centerAns(String code) => _audit!.document.center.putIfAbsent(code, () => Answer());
-  Answer _salaAns(AuditSala s, String code) => s.answers.putIfAbsent(code, () => Answer());
-
-  // ── Auto-guardado local inmediato (debounce corto) ──
-  void _scheduleSave() {
-    if (_locked) return;
-    _saveTimer?.cancel();
-    _saveTimer = Timer(const Duration(milliseconds: 500), _saveNow);
-    if (!_saving) setState(() => _saving = true);
-  }
-
-  Future<void> _saveNow() async {
-    final a = _audit;
-    if (a == null || _locked) return;
-    final c = a.document.center;
-    String? val(String code) {
-      final r = c[code]?.respuesta?.trim();
-      return (r == null || r.isEmpty) ? null : r;
-    }
-
-    // Denormaliza la cabecera desde IDENTIFICACIÓN si no vino del maestro.
-    if (a.centerId == null) a.centerName = val('ID-01') ?? a.centerName;
-    a.auditor ??= val('ID-04');
-    a.sampledAtUtc ??= DateTime.tryParse(c['ID-03']?.respuesta ?? '');
-    a.updatedAtUtc = DateTime.now().toUtc();
-
-    await context.read<AppDatabase>().upsertLocal(a); // marca dirty
-    if (mounted) setState(() => _saving = false);
-  }
-
+  // ── Salas ──
   void _addSala() {
     setState(() {
       final n = _audit!.document.salas.length + 1;
@@ -150,6 +139,68 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  // ── Consultas adicionales ──
+  bool _isOtro(TemplateQuestion q) => q.text.trim().toLowerCase() == 'otro';
+  bool _sectionHasOtro(TemplateSection s) => s.questions.any(_isOtro);
+  String _extraPrefix(TemplateSection s) => '${s.code}~EX~';
+  List<String> _extraKeys(Map<String, Answer> map, TemplateSection s) =>
+      (map.keys.where((k) => k.startsWith(_extraPrefix(s))).toList()..sort());
+  void _addExtra(Map<String, Answer> map, TemplateSection s) {
+    map['${_extraPrefix(s)}${const Uuid().v4()}'] = Answer(titulo: '');
+    setState(() {});
+    _scheduleSave();
+  }
+  void _removeExtra(Map<String, Answer> map, String key) {
+    map.remove(key);
+    setState(() {});
+    _scheduleSave();
+  }
+
+  // ── Comentarios ──
+  bool _commentVisible(Answer a) => (a.comentario?.isNotEmpty ?? false) || _showComment.contains(a);
+  void _toggleComment(Answer a) {
+    setState(() {
+      if (_commentVisible(a)) {
+        a.comentario = null;
+        _showComment.remove(a);
+      } else {
+        _showComment.add(a);
+      }
+    });
+    _scheduleSave();
+  }
+
+  // ── Colores/badges (espejo de la web) ──
+  Color _badgeColor(String code) {
+    switch (code.split('-').first) {
+      case 'ID': return const Color(0xFF3949AB);
+      case 'AF': return const Color(0xFF1A76B8);
+      case 'IN': return const Color(0xFF1C7293);
+      case 'PR': return const Color(0xFFC2410C);
+      case 'HI': return const Color(0xFF0891B2);
+      case 'DE': return const Color(0xFF7C3AED);
+      case 'BF': return const Color(0xFF0F7A52);
+      case 'OX': return const Color(0xFF0369A1);
+      case 'OP': return const Color(0xFFB7791F);
+      case 'SA': return const Color(0xFFBE123C);
+      default: return const Color(0xFF566873);
+    }
+  }
+
+  Color _sectionColor(TemplateSection s) =>
+      _badgeColor(s.questions.isNotEmpty ? s.questions.first.code : s.code);
+
+  Widget _badge(String text, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.10),
+          border: Border.all(color: c.withValues(alpha: 0.34)),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(text,
+            style: TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+      );
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
@@ -168,9 +219,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
 
     final a = _audit!;
     final date = a.scheduledForUtc ?? a.sampledAtUtc;
-    final title = date != null
-        ? '${a.centerName} · ${date.toLocal().day.toString().padLeft(2, '0')}-${date.toLocal().month.toString().padLeft(2, '0')}-${date.toLocal().year}'
-        : a.centerName;
+    final title = date != null ? '${a.centerName} · ${_fmt(date)}' : a.centerName;
 
     return Scaffold(
       appBar: AppBar(
@@ -188,8 +237,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
           else
             Padding(
               padding: const EdgeInsets.only(right: 12),
-              child: Center(child: Text(_saving ? 'Guardando…' : 'Guardado',
-                  style: const TextStyle(fontSize: 12))),
+              child: Center(child: Text(_saving ? 'Guardando…' : 'Guardado', style: const TextStyle(fontSize: 12))),
             ),
         ],
       ),
@@ -208,16 +256,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
 
           _headerCard(a),
 
-          for (final sec in _tpl!.centerSections)
-            Card(
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ExpansionTile(
-                title: Text(sec.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                initiallyExpanded: sec.code == _tpl!.centerSections.first.code,
-                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                children: [for (final q in sec.questions) _questionField('c', q, _centerAns(q.code))],
-              ),
-            ),
+          for (final sec in _centerSections) _sectionCard(sec, a.document.center),
 
           const SizedBox(height: 8),
           Row(
@@ -230,34 +269,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
             ],
           ),
 
-          for (final sala in a.document.salas)
-            Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.warehouse_outlined),
-                    title: TextFormField(
-                      key: ValueKey('salaname-${sala.id}'),
-                      initialValue: sala.name,
-                      readOnly: _locked,
-                      decoration: const InputDecoration(labelText: 'Nombre de la sala', border: InputBorder.none),
-                      onChanged: (v) { sala.name = v; _scheduleSave(); },
-                    ),
-                    trailing: _locked ? null : IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      onPressed: () => _removeSala(sala),
-                    ),
-                  ),
-                  for (final sec in _tpl!.salaSections)
-                    ExpansionTile(
-                      title: Text(sec.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      children: [for (final q in sec.questions) _questionField(sala.id, q, _salaAns(sala, q.code))],
-                    ),
-                ],
-              ),
-            ),
+          for (final sala in a.document.salas) _salaCard(sala),
 
           const SizedBox(height: 16),
           if (a.statusEnum == AuditStatus.scheduled)
@@ -269,7 +281,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
           else if (a.statusEnum == AuditStatus.draft)
             FilledButton.icon(
               style: FilledButton.styleFrom(backgroundColor: Colors.green),
-              onPressed: () => _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada'),
+              onPressed: _confirmFinalize,
               icon: const Icon(Icons.check_circle),
               label: const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Text('Finalizar auditoría')),
             ),
@@ -279,125 +291,325 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
     );
   }
 
-  Widget _headerCard(Audit a) {
-    final date = a.scheduledForUtc ?? a.sampledAtUtc;
-    final dateStr = date != null
-        ? '${date.toLocal().day.toString().padLeft(2, '0')}-${date.toLocal().month.toString().padLeft(2, '0')}-${date.toLocal().year}'
-        : 'Sin fecha';
+  String _fmt(DateTime utc) {
+    final d = utc.toLocal();
+    return '${d.day.toString().padLeft(2, '0')}-${d.month.toString().padLeft(2, '0')}-${d.year}';
+  }
 
-    if (_locked) {
-      return Card(
-        margin: const EdgeInsets.only(bottom: 8),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Cliente: ${a.clientName ?? '—'}'),
-              Text('Centro: ${a.centerName}'),
-              Text('Tipo: ${a.typeEnum.label} · Fecha: $dateStr'),
-            ],
+  Future<void> _confirmFinalize() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        icon: const Icon(Icons.check_circle, color: Colors.green),
+        title: const Text('Finalizar auditoría'),
+        content: const Text('Una vez finalizada, la auditoría queda INMUTABLE: no podrás editar ningún dato. ¿Confirmas que está completa?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.green),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sí, finalizar'),
           ),
-        ),
-      );
-    }
+        ],
+      ),
+    );
+    if (ok == true) await _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada');
+  }
 
+  // ── Cabecera = IDENTIFICACIÓN ──
+  Widget _headerCard(Audit a) {
+    final idc = _badgeColor('ID-01');
+    final date = a.scheduledForUtc ?? a.sampledAtUtc;
+    final dateStr = date != null ? _fmt(date) : 'Sin fecha';
     final clientVal = _clients.any((c) => c.id == a.clientId) ? a.clientId : null;
     final centerVal = _centers.any((c) => c.id == a.centerId) ? a.centerId : null;
+    final jefe = _ans(a.document.center, 'ID-02');
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: idc.withValues(alpha: 0.5), width: 2),
+      ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            DropdownButtonFormField<String?>(
-              value: clientVal,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Cliente', isDense: true),
-              items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('— Sin cliente —')),
-                for (final c in _clients) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
-              ],
-              onChanged: _pickClient,
-            ),
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String?>(
-              value: centerVal,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Centro', isDense: true),
-              items: [
-                const DropdownMenuItem<String?>(value: null, child: Text('— Sin centro —')),
-                for (final c in _centers) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
-              ],
-              onChanged: _pickCenter,
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<int>(
-                    value: a.type,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Tipo', isDense: true),
-                    items: const [
-                      DropdownMenuItem(value: 0, child: Text('Spot')),
-                      DropdownMenuItem(value: 1, child: Text('Seguimiento')),
-                    ],
-                    onChanged: _pickType,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _pickDate,
-                    icon: const Icon(Icons.event, size: 18),
-                    label: Text(dateStr),
-                  ),
-                ),
-              ],
-            ),
+            _badge('IDENTIFICACIÓN', idc),
+            const SizedBox(height: 10),
+            // Tipo de auditoría
+            _labeled(null, 'Tipo de auditoría',
+                DropdownButtonFormField<int>(
+                  value: a.type,
+                  isExpanded: true,
+                  decoration: _dec(),
+                  onChanged: _locked ? null : _pickType,
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('Spot')),
+                    DropdownMenuItem(value: 1, child: Text('Seguimiento')),
+                  ],
+                )),
+            // Cliente mandante
+            _labeled(null, 'Cliente mandante',
+                DropdownButtonFormField<String?>(
+                  value: clientVal,
+                  isExpanded: true,
+                  decoration: _dec(),
+                  onChanged: _locked ? null : _pickClient,
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('— Sin cliente —')),
+                    for (final c in _clients) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+                  ],
+                )),
+            // Auditor (solo lectura en el celular)
+            _labeled('ID-04', 'Auditor',
+                InputDecorator(decoration: _dec(), child: Text(a.auditor ?? '—'))),
+            // Fecha
+            _labeled('ID-03', 'Fecha de auditoría',
+                OutlinedButton.icon(
+                  onPressed: _locked ? null : _pickDate,
+                  icon: const Icon(Icons.event, size: 18),
+                  label: Align(alignment: Alignment.centerLeft, child: Text(dateStr)),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                )),
+            // Centro
+            _labeled('ID-01', 'Centro',
+                DropdownButtonFormField<String?>(
+                  value: centerVal,
+                  isExpanded: true,
+                  decoration: _dec(),
+                  onChanged: _locked ? null : _pickCenter,
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('— Sin centro —')),
+                    for (final c in _centers) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+                  ],
+                )),
+            // Jefe de centro / responsable (ID-02)
+            _labeled('ID-02', 'Jefe de centro / responsable',
+                TextFormField(
+                  key: ValueKey('jefe-${a.id}'),
+                  initialValue: jefe.respuesta,
+                  readOnly: _locked,
+                  decoration: _dec(),
+                  onChanged: (v) { jefe.respuesta = v; _scheduleSave(); },
+                )),
           ],
         ),
       ),
     );
   }
 
-  Widget _questionField(String scope, TemplateQuestion q, Answer a) {
+  InputDecoration _dec() => const InputDecoration(isDense: true, border: OutlineInputBorder());
+
+  Widget _labeled(String? code, String label, Widget field) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              if (code != null) ...[_badge(code, _badgeColor(code)), const SizedBox(width: 6)],
+              Flexible(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+            ]),
+            const SizedBox(height: 4),
+            field,
+          ],
+        ),
+      );
+
+  // ── Sección (centro o sala) ──
+  Widget _sectionCard(TemplateSection sec, Map<String, Answer> map, {bool nested = false}) {
+    final c = _sectionColor(sec);
+    final tile = Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+        initiallyExpanded: !nested,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        title: _badge(sec.name, c),
+        children: [
+          for (final q in sec.questions)
+            if (!_isOtro(q)) _questionField(q, _ans(map, q.code)),
+          if (_sectionHasOtro(sec)) _extras(sec, map, c),
+        ],
+      ),
+    );
+    return Container(
+      margin: EdgeInsets.only(bottom: nested ? 6 : 8),
+      decoration: BoxDecoration(
+        border: Border(left: BorderSide(color: c.withValues(alpha: 0.7), width: 3)),
+      ),
+      child: nested
+          ? tile
+          : Card(margin: EdgeInsets.zero, clipBehavior: Clip.antiAlias, child: tile),
+    );
+  }
+
+  // ── Sala colapsable completa ──
+  Widget _salaCard(AuditSala sala) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: true,
+          leading: const Icon(Icons.warehouse_outlined),
+          title: Text(sala.name.isEmpty ? 'Sala' : sala.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          children: [
+            Row(children: [
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('salaname-${sala.id}'),
+                  initialValue: sala.name,
+                  readOnly: _locked,
+                  decoration: _dec().copyWith(labelText: 'Nombre de la sala'),
+                  onChanged: (v) { sala.name = v; _scheduleSave(); },
+                ),
+              ),
+              if (!_locked)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  onPressed: () => _removeSala(sala),
+                ),
+            ]),
+            const SizedBox(height: 8),
+            for (final sec in _tpl!.salaSections) _sectionCard(sec, sala.answers, nested: true),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Pregunta ──
+  Widget _questionField(TemplateQuestion q, Answer a) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(q.text, style: const TextStyle(fontWeight: FontWeight.w600)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _badge(q.code, _badgeColor(q.code)),
+              const SizedBox(width: 8),
+              Expanded(child: Text(q.text, style: const TextStyle(fontWeight: FontWeight.w600))),
+              if (!_locked) _commentMenu(a),
+            ],
+          ),
           if (q.help.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 2, bottom: 4),
               child: Text(q.help, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
             ),
+          const SizedBox(height: 4),
+          _answerBody(a),
+        ],
+      ),
+    );
+  }
+
+  // Menú contextual del comentario (equivalente móvil del clic derecho).
+  Widget _commentMenu(Answer a) => PopupMenuButton<String>(
+        icon: Icon(Icons.more_vert, size: 20, color: Colors.grey.shade600),
+        tooltip: 'Opciones',
+        onSelected: (_) => _toggleComment(a),
+        itemBuilder: (_) => [
+          PopupMenuItem(
+            value: 'c',
+            child: Row(children: [
+              Icon(_commentVisible(a) ? Icons.comments_disabled_outlined : Icons.add_comment_outlined, size: 18),
+              const SizedBox(width: 8),
+              Text(_commentVisible(a) ? 'Quitar comentario' : 'Agregar comentario'),
+            ]),
+          ),
+        ],
+      );
+
+  Widget _answerBody(Answer a) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           TextFormField(
-            key: ValueKey('$scope-${q.code}-r'),
+            key: ValueKey('r-${identityHashCode(a)}'),
             initialValue: a.respuesta,
             readOnly: _locked,
             minLines: 1,
             maxLines: 4,
-            decoration: const InputDecoration(labelText: 'Respuesta', border: OutlineInputBorder(), isDense: true),
+            decoration: _dec().copyWith(labelText: 'Respuesta'),
             onChanged: (v) { a.respuesta = v; _scheduleSave(); },
           ),
-          const SizedBox(height: 6),
-          TextFormField(
-            key: ValueKey('$scope-${q.code}-c'),
-            initialValue: a.comentario,
-            readOnly: _locked,
-            decoration: const InputDecoration(
-              labelText: 'Comentario (opcional)',
-              prefixIcon: Icon(Icons.comment_outlined, size: 18),
-              isDense: true,
+          if (_commentVisible(a))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: TextFormField(
+                key: ValueKey('cmt-${identityHashCode(a)}'),
+                initialValue: a.comentario,
+                readOnly: _locked,
+                minLines: 1,
+                maxLines: 3,
+                decoration: _dec().copyWith(
+                  labelText: 'Comentario',
+                  prefixIcon: const Icon(Icons.comment_outlined, size: 18),
+                ),
+                onChanged: (v) { a.comentario = v; _scheduleSave(); },
+              ),
             ),
-            onChanged: (v) { a.comentario = v; _scheduleSave(); },
-          ),
         ],
-      ),
+      );
+
+  // ── Consultas adicionales de una sección ──
+  Widget _extras(TemplateSection sec, Map<String, Answer> map, Color c) {
+    final keys = _extraKeys(map, sec);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final key in keys)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.only(left: 10),
+            decoration: BoxDecoration(
+              border: Border(left: BorderSide(color: c.withValues(alpha: 0.4), width: 2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  _badge('EXTRA', c),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextFormField(
+                      key: ValueKey('xt-$key'),
+                      initialValue: map[key]!.titulo,
+                      readOnly: _locked,
+                      decoration: const InputDecoration(isDense: true, hintText: 'Título de la consulta adicional', border: UnderlineInputBorder()),
+                      onChanged: (v) { map[key]!.titulo = v; _scheduleSave(); },
+                    ),
+                  ),
+                  if (!_locked) _commentMenu(map[key]!),
+                  if (!_locked)
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 18, color: Colors.red),
+                      onPressed: () => _removeExtra(map, key),
+                    ),
+                ]),
+                const SizedBox(height: 4),
+                _answerBody(map[key]!),
+              ],
+            ),
+          ),
+        if (!_locked)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => _addExtra(map, sec),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Agregar consulta adicional'),
+            ),
+          ),
+      ],
     );
   }
 }
