@@ -8,7 +8,7 @@ import '../models/master.dart';
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 4;
+  static const _dbVersion = 5;
 
   Database? _db;
 
@@ -40,6 +40,10 @@ class AppDatabase {
         if (oldV < 4) {
           await _createUsers(db);
         }
+        if (oldV < 5) {
+          // Serie de auditorías (seguimiento). try/catch por si oldV<2 ya recreó audits con la columna.
+          try { await db.execute('ALTER TABLE audits ADD COLUMN previous_audit_id TEXT;'); } catch (_) {}
+        }
       },
     );
   }
@@ -58,6 +62,7 @@ class AppDatabase {
         client_name     TEXT,
         created_by_name TEXT,
         scheduled_for   TEXT,
+        previous_audit_id TEXT,
         document        TEXT NOT NULL,
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL,

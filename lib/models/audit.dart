@@ -49,21 +49,112 @@ class Answer {
       );
 }
 
-/// Una sala evaluada dentro del centro.
+/// Referencia a una evidencia (foto/audio) de un punto de control. El binario vive local
+/// y/o en el servidor; aquí solo el id + metadatos.
+class Evidencia {
+  String id;
+  String? contentType;
+  DateTime? capturedAtUtc;
+  bool uploaded;
+  String? transcripcion; // solo audio; se llena luego con la API de Claude
+
+  Evidencia({required this.id, this.contentType, this.capturedAtUtc, this.uploaded = false, this.transcripcion});
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'contentType': contentType,
+        'capturedAtUtc': capturedAtUtc?.toUtc().toIso8601String(),
+        'uploaded': uploaded,
+        'transcripcion': transcripcion,
+      };
+
+  factory Evidencia.fromJson(Map<String, dynamic> j) => Evidencia(
+        id: (j['id'] ?? '') as String,
+        contentType: j['contentType'] as String?,
+        capturedAtUtc: j['capturedAtUtc'] != null ? DateTime.parse(j['capturedAtUtc'] as String) : null,
+        uploaded: (j['uploaded'] ?? false) as bool,
+        transcripcion: j['transcripcion'] as String?,
+      );
+}
+
+/// Punto de control (Auditoría RPN): cosa a inspeccionar dentro de un Sistema, medida en 4
+/// dimensiones operacionales (1–5) + comentario + evidencias (fotos/audio).
+class PuntoControl {
+  String id;
+  String nombre;
+  bool isDeleted;
+  int? estadoOperacional; // O
+  int? limpiezaBiofilm; // L
+  int? impactoPeces; // I
+  int? detectabilidad; // D
+  String? comentario;
+  List<Evidencia> fotos;
+  List<Evidencia> audios;
+
+  PuntoControl({
+    required this.id,
+    this.nombre = '',
+    this.isDeleted = false,
+    this.estadoOperacional,
+    this.limpiezaBiofilm,
+    this.impactoPeces,
+    this.detectabilidad,
+    this.comentario,
+    List<Evidencia>? fotos,
+    List<Evidencia>? audios,
+  })  : fotos = fotos ?? [],
+        audios = audios ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'nombre': nombre,
+        'isDeleted': isDeleted,
+        'estadoOperacional': estadoOperacional,
+        'limpiezaBiofilm': limpiezaBiofilm,
+        'impactoPeces': impactoPeces,
+        'detectabilidad': detectabilidad,
+        'comentario': comentario,
+        'fotos': fotos.map((e) => e.toJson()).toList(),
+        'audios': audios.map((e) => e.toJson()).toList(),
+      };
+
+  factory PuntoControl.fromJson(Map<String, dynamic> j) => PuntoControl(
+        id: (j['id'] ?? '') as String,
+        nombre: (j['nombre'] ?? '') as String,
+        isDeleted: (j['isDeleted'] ?? false) as bool,
+        estadoOperacional: j['estadoOperacional'] as int?,
+        limpiezaBiofilm: j['limpiezaBiofilm'] as int?,
+        impactoPeces: j['impactoPeces'] as int?,
+        detectabilidad: j['detectabilidad'] as int?,
+        comentario: j['comentario'] as String?,
+        fotos: ((j['fotos'] ?? []) as List).map((e) => Evidencia.fromJson((e ?? {}) as Map<String, dynamic>)).toList(),
+        audios: ((j['audios'] ?? []) as List).map((e) => Evidencia.fromJson((e ?? {}) as Map<String, dynamic>)).toList(),
+      );
+}
+
+/// Un Sistema evaluado dentro del centro (transversal a Entrevista e Inspección/RPN).
 class AuditSala {
   String id;
   String name;
   bool isDeleted; // soft-delete recuperable
-  Map<String, Answer> answers;
+  Map<String, Answer> answers; // entrevista
+  List<PuntoControl> puntosControl; // inspección RPN
 
-  AuditSala({required this.id, this.name = '', this.isDeleted = false, Map<String, Answer>? answers})
-      : answers = answers ?? {};
+  AuditSala({
+    required this.id,
+    this.name = '',
+    this.isDeleted = false,
+    Map<String, Answer>? answers,
+    List<PuntoControl>? puntosControl,
+  })  : answers = answers ?? {},
+        puntosControl = puntosControl ?? [];
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
         'isDeleted': isDeleted,
         'answers': answers.map((k, v) => MapEntry(k, v.toJson())),
+        'puntosControl': puntosControl.map((p) => p.toJson()).toList(),
       };
 
   factory AuditSala.fromJson(Map<String, dynamic> j) => AuditSala(
@@ -72,6 +163,9 @@ class AuditSala {
         isDeleted: (j['isDeleted'] ?? false) as bool,
         answers: ((j['answers'] ?? {}) as Map<String, dynamic>)
             .map((k, v) => MapEntry(k, Answer.fromJson((v ?? {}) as Map<String, dynamic>))),
+        puntosControl: ((j['puntosControl'] ?? []) as List)
+            .map((p) => PuntoControl.fromJson((p ?? {}) as Map<String, dynamic>))
+            .toList(),
       );
 }
 
@@ -116,6 +210,7 @@ class Audit {
   String? clientName;
   String? createdByName;
   DateTime? scheduledForUtc;
+  String? previousAuditId; // serie (seguimiento -> auditoría anterior)
   AuditDocument document;
   DateTime createdAtUtc;
   DateTime updatedAtUtc;
@@ -135,6 +230,7 @@ class Audit {
     this.clientName,
     this.createdByName,
     this.scheduledForUtc,
+    this.previousAuditId,
     AuditDocument? document,
     required this.createdAtUtc,
     required this.updatedAtUtc,
@@ -160,6 +256,7 @@ class Audit {
         'client_name': clientName,
         'created_by_name': createdByName,
         'scheduled_for': scheduledForUtc?.toUtc().toIso8601String(),
+        'previous_audit_id': previousAuditId,
         'document': document.encode(),
         'created_at': createdAtUtc.toUtc().toIso8601String(),
         'updated_at': updatedAtUtc.toUtc().toIso8601String(),
@@ -180,6 +277,7 @@ class Audit {
         clientName: r['client_name'] as String?,
         createdByName: r['created_by_name'] as String?,
         scheduledForUtc: (r['scheduled_for'] as String?) != null ? DateTime.parse(r['scheduled_for'] as String) : null,
+        previousAuditId: r['previous_audit_id'] as String?,
         document: AuditDocument.decode(r['document'] as String?),
         createdAtUtc: DateTime.parse(r['created_at'] as String),
         updatedAtUtc: DateTime.parse(r['updated_at'] as String),
@@ -201,6 +299,7 @@ class Audit {
         'clientName': clientName,
         'createdByName': createdByName,
         'scheduledForUtc': scheduledForUtc?.toUtc().toIso8601String(),
+        'previousAuditId': previousAuditId,
         'document': document.toJson(),
         'createdAtUtc': createdAtUtc.toUtc().toIso8601String(),
         'updatedAtUtc': updatedAtUtc.toUtc().toIso8601String(),
@@ -220,6 +319,7 @@ class Audit {
         clientName: d['clientName'] as String?,
         createdByName: d['createdByName'] as String?,
         scheduledForUtc: d['scheduledForUtc'] != null ? DateTime.parse(d['scheduledForUtc'] as String) : null,
+        previousAuditId: d['previousAuditId'] as String?,
         document: AuditDocument.fromJson((d['document'] ?? {}) as Map<String, dynamic>),
         createdAtUtc: DateTime.parse(d['createdAtUtc'] as String),
         updatedAtUtc: DateTime.parse(d['updatedAtUtc'] as String),

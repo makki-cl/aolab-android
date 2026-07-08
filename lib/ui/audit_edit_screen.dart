@@ -18,7 +18,8 @@ class AuditEditScreen extends StatefulWidget {
   State<AuditEditScreen> createState() => _AuditEditScreenState();
 }
 
-class _AuditEditScreenState extends State<AuditEditScreen> {
+class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProviderStateMixin {
+  late final TabController _tab;
   Audit? _audit;
   QuestionnaireTemplate? _tpl;
   List<ClientRef> _clients = [];
@@ -32,12 +33,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   @override
   void initState() {
     super.initState();
+    _tab = TabController(length: 2, vsync: this);
     _load();
   }
 
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _tab.dispose();
     super.dispose();
   }
 
@@ -125,7 +128,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
   void _addSala() {
     setState(() {
       final n = _audit!.document.salas.where((s) => !s.isDeleted).length + 1;
-      _audit!.document.salas.add(AuditSala(id: const Uuid().v4(), name: 'Sala $n'));
+      _audit!.document.salas.add(AuditSala(id: const Uuid().v4(), name: 'Sistema $n'));
     });
     _scheduleSave();
   }
@@ -135,8 +138,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
       context: context,
       builder: (_) => AlertDialog(
         icon: const Icon(Icons.delete_outline, color: Colors.red),
-        title: const Text('Eliminar sala'),
-        content: Text('¿Eliminar la sala «${s.name.isEmpty ? 'Sala' : s.name}»?'),
+        title: const Text('Eliminar sistema'),
+        content: Text('¿Eliminar el sistema «${s.name.isEmpty ? 'Sistema' : s.name}»?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(
@@ -270,8 +273,51 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
               child: Center(child: Text(_saving ? 'Guardando…' : 'Guardado', style: const TextStyle(fontSize: 12))),
             ),
         ],
+        bottom: TabBar(
+          controller: _tab,
+          tabs: const [
+            Tab(icon: Icon(Icons.question_answer_outlined), text: 'Entrevista'),
+            Tab(icon: Icon(Icons.fact_check_outlined), text: 'Auditoría RPN'),
+          ],
+        ),
       ),
-      body: ListView(
+      body: Column(
+        children: [
+          if (!_locked) _topActions(a),
+          Expanded(
+            child: TabBarView(
+              controller: _tab,
+              children: [_entrevistaTab(a), _rpnTab(a)],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Acciones al inicio: guardar + iniciar/finalizar.
+  Widget _topActions(Audit a) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        child: Row(children: [
+          FilledButton.tonalIcon(
+              onPressed: _saveNow, icon: const Icon(Icons.save_outlined, size: 18), label: const Text('Guardar')),
+          const SizedBox(width: 8),
+          if (a.statusEnum == AuditStatus.scheduled)
+            OutlinedButton.icon(
+                onPressed: () => _setStatus(AuditStatus.draft.value, 'Auditoría iniciada'),
+                icon: const Icon(Icons.play_arrow, size: 18),
+                label: const Text('Iniciar'))
+          else if (a.statusEnum == AuditStatus.draft)
+            OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.green),
+                onPressed: _confirmFinalize,
+                icon: const Icon(Icons.check_circle, size: 18),
+                label: const Text('Finalizar')),
+        ]),
+      );
+
+  // ── Pestaña 1: ENTREVISTA (el cuestionario) ──
+  Widget _entrevistaTab(Audit a) => ListView(
         padding: const EdgeInsets.all(12),
         children: [
           if (_locked)
@@ -283,44 +329,182 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
                 subtitle: Text('Los datos quedan fijos (solo lectura).'),
               ),
             ),
-
           _headerCard(a),
-
           for (final sec in _centerSections) _sectionCard(sec, a.document.center),
-
           const SizedBox(height: 8),
           Row(
             children: [
-              Text('Salas (${a.document.salas.where((s) => !s.isDeleted).length})',
+              Text('Sistemas (${a.document.salas.where((s) => !s.isDeleted).length})',
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
               const Spacer(),
               if (!_locked)
-                TextButton.icon(onPressed: _addSala, icon: const Icon(Icons.add_business), label: const Text('Agregar sala')),
+                TextButton.icon(onPressed: _addSala, icon: const Icon(Icons.add_business), label: const Text('Agregar sistema')),
             ],
           ),
-
           for (final sala in a.document.salas.where((s) => !s.isDeleted)) _salaCard(sala),
-
           _deletedSalas(a),
-
-          const SizedBox(height: 16),
-          if (a.statusEnum == AuditStatus.scheduled)
-            FilledButton.icon(
-              onPressed: () => _setStatus(AuditStatus.draft.value, 'Auditoría iniciada'),
-              icon: const Icon(Icons.play_arrow),
-              label: const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Text('Iniciar auditoría')),
-            )
-          else if (a.statusEnum == AuditStatus.draft)
-            FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: Colors.green),
-              onPressed: _confirmFinalize,
-              icon: const Icon(Icons.check_circle),
-              label: const Padding(padding: EdgeInsets.symmetric(vertical: 10), child: Text('Finalizar auditoría')),
-            ),
           const SizedBox(height: 40),
         ],
+      );
+
+  // ── Pestaña 2: AUDITORÍA RPN (puntos de control por sistema) ──
+  Widget _rpnTab(Audit a) {
+    final sistemas = a.document.salas.where((s) => !s.isDeleted).toList();
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (sistemas.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Agrega sistemas en la pestaña Entrevista para inspeccionar sus puntos de control.'),
+            ),
+          ),
+        for (final sistema in sistemas) _sistemaRpnCard(sistema),
+        const SizedBox(height: 40),
+      ],
+    );
+  }
+
+  Widget _sistemaRpnCard(AuditSala sistema) {
+    final c = _badgeColor('IN-01');
+    final puntos = sistema.puntosControl.where((x) => !x.isDeleted).toList();
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        decoration: BoxDecoration(border: Border(left: BorderSide(color: c, width: 4))),
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            initiallyExpanded: true,
+            leading: const Icon(Icons.warehouse_outlined),
+            title: Text(sistema.name.isEmpty ? 'Sistema' : sistema.name,
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            children: [
+              for (final p in puntos) _puntoCard(sistema, p),
+              if (puntos.isEmpty)
+                const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 6),
+                    child: Text('Sin puntos de control aún.', style: TextStyle(color: Colors.grey))),
+              if (!_locked)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                      onPressed: () => _addPunto(sistema),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Agregar punto de control')),
+                ),
+            ],
+          ),
+        ),
       ),
     );
+  }
+
+  Widget _puntoCard(AuditSala sistema, PuntoControl p) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE1E6F0)),
+          borderRadius: BorderRadius.circular(10),
+          color: const Color(0xFFFCFDFF),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Expanded(
+                child: TextFormField(
+                  key: ValueKey('pn-${p.id}'),
+                  initialValue: p.nombre,
+                  readOnly: _locked,
+                  decoration: _dec().copyWith(hintText: 'Punto de muestreo (equipo / componente)'),
+                  onChanged: (v) { p.nombre = v; _scheduleSave(); },
+                ),
+              ),
+              if (!_locked)
+                IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    onPressed: () => _removePunto(sistema, p)),
+            ]),
+            const SizedBox(height: 6),
+            _varRow('O', 'Estado Operacional', p.estadoOperacional, (v) { p.estadoOperacional = v; _scheduleSave(); }),
+            _varRow('L', 'Limpieza Biofilm', p.limpiezaBiofilm, (v) { p.limpiezaBiofilm = v; _scheduleSave(); }),
+            _varRow('I', 'Impacto Peces', p.impactoPeces, (v) { p.impactoPeces = v; _scheduleSave(); }),
+            _varRow('D', 'Detectabilidad', p.detectabilidad, (v) { p.detectabilidad = v; _scheduleSave(); }),
+            const SizedBox(height: 6),
+            TextFormField(
+              key: ValueKey('pc-${p.id}'),
+              initialValue: p.comentario,
+              readOnly: _locked,
+              minLines: 1,
+              maxLines: 3,
+              decoration: _dec().copyWith(
+                  labelText: 'Comentario / observación',
+                  prefixIcon: const Icon(Icons.comment_outlined, size: 18)),
+              onChanged: (v) { p.comentario = v; _scheduleSave(); },
+            ),
+            // Fotos y audio del punto: fase 4/5.
+          ],
+        ),
+      );
+
+  Widget _varRow(String letra, String nombre, int? valor, void Function(int?) set) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(children: [
+          Container(
+            width: 22, height: 22, alignment: Alignment.center,
+            decoration: BoxDecoration(color: const Color(0xFF000E3F), borderRadius: BorderRadius.circular(6)),
+            child: Text(letra, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(nombre, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
+          for (final n in const [1, 2, 3, 4, 5])
+            _scaleBtn(n, valor == n, () => set(valor == n ? null : n)),
+        ]),
+      );
+
+  Widget _scaleBtn(int n, bool sel, VoidCallback onTap) {
+    final color = _riskColor(n);
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: InkWell(
+        onTap: _locked ? null : onTap,
+        borderRadius: BorderRadius.circular(7),
+        child: Container(
+          width: 32, height: 32, alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: sel ? color : Colors.white,
+            border: Border.all(color: sel ? color : const Color(0xFFDDE2EC)),
+            borderRadius: BorderRadius.circular(7),
+          ),
+          child: Text('$n',
+              style: TextStyle(color: sel ? Colors.white : const Color(0xFF556173), fontWeight: FontWeight.w700)),
+        ),
+      ),
+    );
+  }
+
+  Color _riskColor(int v) => switch (v) {
+        1 => const Color(0xFF2E7D32),
+        2 => const Color(0xFF7CB342),
+        3 => const Color(0xFFF9A825),
+        4 => const Color(0xFFEF6C00),
+        5 => const Color(0xFFC62828),
+        _ => const Color(0xFF556173),
+      };
+
+  void _addPunto(AuditSala sistema) {
+    setState(() => sistema.puntosControl.add(PuntoControl(id: const Uuid().v4())));
+    _scheduleSave();
+  }
+
+  void _removePunto(AuditSala sistema, PuntoControl p) {
+    setState(() => sistema.puntosControl.remove(p));
+    _scheduleSave();
   }
 
   String _fmt(DateTime utc) {
@@ -517,7 +701,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           leading: const Icon(Icons.delete_outline),
-          title: Text('Salas eliminadas (${deleted.length})',
+          title: Text('Sistemas eliminados (${deleted.length})',
               style: const TextStyle(fontWeight: FontWeight.w600)),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
           children: [
@@ -526,7 +710,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
                 dense: true,
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.warehouse_outlined, size: 20),
-                title: Text(sala.name.isEmpty ? 'Sala' : sala.name),
+                title: Text(sala.name.isEmpty ? 'Sistema' : sala.name),
                 trailing: TextButton.icon(
                   icon: const Icon(Icons.restore_from_trash, size: 18),
                   label: const Text('Restaurar'),
@@ -549,7 +733,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
         child: ExpansionTile(
           initiallyExpanded: true,
           leading: const Icon(Icons.warehouse_outlined),
-          title: Text(sala.name.isEmpty ? 'Sala' : sala.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+          title: Text(sala.name.isEmpty ? 'Sistema' : sala.name, style: const TextStyle(fontWeight: FontWeight.w700)),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           children: [
             Row(children: [
@@ -558,7 +742,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> {
                   key: ValueKey('salaname-${sala.id}'),
                   initialValue: sala.name,
                   readOnly: _locked,
-                  decoration: _dec().copyWith(labelText: 'Nombre de la sala'),
+                  decoration: _dec().copyWith(labelText: 'Nombre del sistema'),
                   onChanged: (v) { sala.name = v; _scheduleSave(); },
                 ),
               ),
