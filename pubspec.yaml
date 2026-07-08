@@ -37,6 +37,9 @@ dependencies:
   # Login con Google (nativo)
   google_sign_in: ^6.2.2
 
+  # Cámara / galería para fotos de puntos de control (evidencias)
+  image_picker: ^1.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

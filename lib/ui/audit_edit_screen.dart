@@ -1,13 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
+import '../config.dart';
 import '../data/app_database.dart';
 import '../models/audit.dart';
 import '../models/master.dart';
 import '../models/questionnaire.dart';
+import '../services/auth_service.dart';
+import '../services/media_service.dart';
 import '../services/template_service.dart';
 
 class AuditEditScreen extends StatefulWidget {
@@ -20,6 +25,7 @@ class AuditEditScreen extends StatefulWidget {
 
 class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProviderStateMixin {
   late final TabController _tab;
+  late final MediaService _media;
   Audit? _audit;
   QuestionnaireTemplate? _tpl;
   List<ClientRef> _clients = [];
@@ -34,6 +40,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
+    _media = context.read<MediaService>();
     _load();
   }
 
@@ -51,6 +58,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _clients = await db.activeClients();
     _centers = await db.activeCenters();
     _users = await db.allUsers();
+    await _media.dirPath(); // inicializa la carpeta local de evidencias
     if (mounted) setState(() => _loading = false);
   }
 
@@ -447,10 +455,107 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                   prefixIcon: const Icon(Icons.comment_outlined, size: 18)),
               onChanged: (v) { p.comentario = v; _scheduleSave(); },
             ),
-            // Fotos y audio del punto: fase 4/5.
+            _fotosRow(p),
+            // Audio + validación de micrófono: fase 5.
           ],
         ),
       );
+
+  // ── Fotos del punto (cámara/galería, offline) ──
+  Map<String, String> _authHeaders() {
+    final t = context.read<AuthService>().token;
+    return t != null && t.isNotEmpty ? {'Authorization': 'Bearer $t'} : {};
+  }
+
+  Widget _fotosRow(PuntoControl p) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final ev in p.fotos) _thumb(p, ev),
+          if (!_locked)
+            InkWell(
+              onTap: () => _addFoto(p),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: 72, height: 72,
+                decoration: BoxDecoration(border: Border.all(color: const Color(0xFFDDE2EC)), borderRadius: BorderRadius.circular(8)),
+                child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(Icons.add_a_photo_outlined, color: Color(0xFF556173)),
+                  SizedBox(height: 2),
+                  Text('Foto', style: TextStyle(fontSize: 11, color: Color(0xFF556173))),
+                ]),
+              ),
+            ),
+        ]),
+      );
+
+  Widget _thumb(PuntoControl p, Evidencia ev) {
+    final f = _media.fileFor(ev.id);
+    final local = f.existsSync();
+    final Widget img = local
+        ? Image.file(f, width: 72, height: 72, fit: BoxFit.cover)
+        : Image.network(
+            '${AppConfig.apiBaseUrl}/api/evidencias/${ev.id}',
+            width: 72, height: 72, fit: BoxFit.cover, headers: _authHeaders(),
+            errorBuilder: (_, __, ___) => Container(
+                width: 72, height: 72, color: const Color(0xFFF4F6FB),
+                child: const Icon(Icons.image_not_supported_outlined, color: Colors.grey)),
+          );
+    return SizedBox(
+      width: 72, height: 72,
+      child: Stack(clipBehavior: Clip.none, children: [
+        ClipRRect(borderRadius: BorderRadius.circular(8), child: img),
+        if (!ev.uploaded)
+          const Positioned(bottom: 2, left: 2, child: Icon(Icons.cloud_upload_outlined, size: 16, color: Color(0xFFE0A030))),
+        if (!_locked)
+          Positioned(
+            top: -6, right: -6,
+            child: GestureDetector(
+              onTap: () => _removeFoto(p, ev),
+              child: Container(
+                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                padding: const EdgeInsets.all(3),
+                child: const Icon(Icons.close, size: 14, color: Colors.white),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Future<void> _addFoto(PuntoControl p) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Tomar foto'),
+              onTap: () => Navigator.pop(context, ImageSource.camera)),
+          ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Elegir de galería'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery)),
+        ]),
+      ),
+    );
+    if (source == null) return;
+    try {
+      final ev = await _media.capturePhoto(source: source);
+      if (ev == null) return;
+      setState(() => p.fotos.add(ev));
+      _scheduleSave();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo capturar la foto: $e')));
+      }
+    }
+  }
+
+  Future<void> _removeFoto(PuntoControl p, Evidencia ev) async {
+    await _media.remove(ev.id);
+    setState(() => p.fotos.remove(ev));
+    _scheduleSave();
+  }
 
   Widget _varRow(String letra, String nombre, int? valor, void Function(int?) set) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 5),

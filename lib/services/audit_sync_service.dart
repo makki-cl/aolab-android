@@ -6,6 +6,7 @@ import '../data/app_database.dart';
 import '../models/audit.dart';
 import 'api_client.dart';
 import 'master_sync_service.dart';
+import 'media_service.dart';
 
 enum SyncStatus { idle, syncing, offline, error }
 
@@ -16,12 +17,13 @@ class AuditSyncService extends ChangeNotifier {
   final AppDatabase db;
   final ApiClient api;
   final MasterSyncService masters;
+  final MediaService media;
 
   SyncStatus status = SyncStatus.idle;
   String? lastError;
   DateTime? lastSyncAt;
 
-  AuditSyncService({required this.db, required this.api, required this.masters});
+  AuditSyncService({required this.db, required this.api, required this.masters, required this.media});
 
   Future<bool> _isOnline() async {
     final r = await Connectivity().checkConnectivity();
@@ -36,6 +38,7 @@ class AuditSyncService extends ChangeNotifier {
     }
     _set(SyncStatus.syncing);
     try {
+      await _uploadMedia();
       await _push();
       await _pull();
       await masters.pull(); // refresca clientes/centros para los selectores
@@ -47,6 +50,27 @@ class AuditSyncService extends ChangeNotifier {
     } catch (e) {
       lastError = '$e';
       _set(SyncStatus.error);
+    }
+  }
+
+  /// Sube las evidencias (fotos/audio) pendientes de cada auditoría local. Si alguna cambió
+  /// su estado a "subida", re-guarda la auditoría (dirty) para que el push refleje el flag.
+  Future<void> _uploadMedia() async {
+    final audits = await db.visibleAudits();
+    for (final a in audits) {
+      final evs = <Evidencia>[];
+      for (final s in a.document.salas) {
+        for (final pc in s.puntosControl) {
+          evs.addAll(pc.fotos);
+          evs.addAll(pc.audios);
+        }
+      }
+      if (evs.isEmpty) continue;
+      final changed = await media.uploadPending(evs);
+      if (changed) {
+        a.updatedAtUtc = DateTime.now().toUtc();
+        await db.upsertLocal(a); // markDirty -> el push envía el documento con uploaded=true
+      }
     }
   }
 
