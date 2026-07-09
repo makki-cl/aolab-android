@@ -439,10 +439,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                     onPressed: () => _removePunto(sistema, p)),
             ]),
             const SizedBox(height: 6),
-            _varRow('O', 'Estado Operacional', p.estadoOperacional, (v) { p.estadoOperacional = v; _scheduleSave(); }),
-            _varRow('L', 'Limpieza Biofilm', p.limpiezaBiofilm, (v) { p.limpiezaBiofilm = v; _scheduleSave(); }),
-            _varRow('I', 'Impacto Peces', p.impactoPeces, (v) { p.impactoPeces = v; _scheduleSave(); }),
-            _varRow('D', 'Detectabilidad', p.detectabilidad, (v) { p.detectabilidad = v; _scheduleSave(); }),
+            _evalBlock(p),
             const SizedBox(height: 6),
             TextFormField(
               key: ValueKey('pc-${p.id}'),
@@ -557,41 +554,125 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _scheduleSave();
   }
 
-  Widget _varRow(String letra, String nombre, int? valor, void Function(int?) set) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(children: [
-          Container(
-            width: 22, height: 22, alignment: Alignment.center,
-            decoration: BoxDecoration(color: const Color(0xFF000E3F), borderRadius: BorderRadius.circular(6)),
-            child: Text(letra, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+  // ── Evaluación de terreno (matriz RPN): 4 dimensiones 1–5 con la escala descrita ──
+  static const List<Map<String, dynamic>> _dims = [
+    {'l': 'O', 'n': 'Estado operacional', 'sub': null, 'e': ['Óptimo, en parámetros', 'Desviación leve', 'Desviación moderada', 'Fuera de rango', 'Crítico / falla']},
+    {'l': 'L', 'n': 'Limpieza / biofilm', 'sub': null, 'e': ['Impecable, sin biofilm', 'Suciedad leve', 'Biofilm incipiente', 'Biofilm extendido', 'Biofilm maduro']},
+    {'l': 'I', 'n': 'Impacto en peces', 'sub': null, 'e': ['Sin impacto', 'Estrés leve posible', 'Impacto moderado', 'Daño probable', 'Mortalidad probable']},
+    {'l': 'D', 'n': 'Detectabilidad', 'sub': 'dificultad de detectar a tiempo', 'e': ['Muy evidente', 'Detectable con rutina', 'Requiere control dirigido', 'Difícil / tardío', 'Oculto / latente']},
+  ];
+
+  int? _getDim(PuntoControl p, int i) => switch (i) {
+        0 => p.estadoOperacional,
+        1 => p.limpiezaBiofilm,
+        2 => p.impactoPeces,
+        3 => p.detectabilidad,
+        _ => null,
+      };
+
+  void _setDim(PuntoControl p, int i, int? v) {
+    setState(() {
+      switch (i) {
+        case 0: p.estadoOperacional = v; break;
+        case 1: p.limpiezaBiofilm = v; break;
+        case 2: p.impactoPeces = v; break;
+        case 3: p.detectabilidad = v; break;
+      }
+    });
+    _scheduleSave();
+  }
+
+  Widget _evalBlock(PuntoControl p) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2, bottom: 4),
+            child: Text('EVALUACIÓN DE TERRENO  (1 = MEJOR · 5 = PEOR)',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3, color: Color(0xFF000E3F))),
           ),
-          const SizedBox(width: 8),
-          Expanded(child: Text(nombre, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
-          for (final n in const [1, 2, 3, 4, 5])
-            _scaleBtn(n, valor == n, () => set(valor == n ? null : n)),
-        ]),
+          for (var i = 0; i < _dims.length; i++) _dimRow(p, i),
+          _legend(),
+        ],
       );
 
-  Widget _scaleBtn(int n, bool sel, VoidCallback onTap) {
-    final color = _riskColor(n);
+  Widget _dimRow(PuntoControl p, int i) {
+    final d = _dims[i];
+    final e = (d['e'] as List).cast<String>();
+    final val = _getDim(p, i);
     return Padding(
-      padding: const EdgeInsets.only(left: 4),
-      child: InkWell(
-        onTap: _locked ? null : onTap,
-        borderRadius: BorderRadius.circular(7),
-        child: Container(
-          width: 32, height: 32, alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: sel ? color : Colors.white,
-            border: Border.all(color: sel ? color : const Color(0xFFDDE2EC)),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: Text('$n',
-              style: TextStyle(color: sel ? Colors.white : const Color(0xFF556173), fontWeight: FontWeight.w700)),
-        ),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            RichText(
+              text: TextSpan(style: const TextStyle(fontSize: 14), children: [
+                TextSpan(text: d['l'] as String, style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF1C7293))),
+                TextSpan(text: ' · ${d['n']}', style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF000E3F))),
+              ]),
+            ),
+            const Spacer(),
+            Flexible(
+              child: Text(val != null ? e[val - 1] : 'Selecciona',
+                  textAlign: TextAlign.right, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF556173))),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            for (final n in const [1, 2, 3, 4, 5]) ...[
+              Expanded(child: _dimBtn(n, val == n, () => _setDim(p, i, val == n ? null : n))),
+              if (n < 5) const SizedBox(width: 8),
+            ],
+          ]),
+        ],
       ),
     );
   }
+
+  Widget _dimBtn(int n, bool sel, VoidCallback onTap) {
+    final color = _riskColor(n);
+    return InkWell(
+      onTap: _locked ? null : onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        height: 42, alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: sel ? color : Colors.white,
+          border: Border.all(color: sel ? color : const Color(0xFFDDE2EC)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text('$n',
+            style: TextStyle(color: sel ? Colors.white : const Color(0xFF000E3F), fontWeight: FontWeight.w700, fontSize: 16)),
+      ),
+    );
+  }
+
+  Widget _legend() => Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: const Text('¿Qué significa cada escala?',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF2D58FF))),
+          children: [
+            for (final d in _dims)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(d['sub'] == null ? '${d['l']} — ${d['n']}' : '${d['l']} — ${d['n']} (${d['sub']})',
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: Color(0xFF000E3F))),
+                    const SizedBox(height: 2),
+                    Text([for (var i = 0; i < 5; i++) '${i + 1}: ${(d['e'] as List)[i]}'].join(' · '),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF556173), height: 1.35)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      );
 
   Color _riskColor(int v) => switch (v) {
         1 => const Color(0xFF2E7D32),
