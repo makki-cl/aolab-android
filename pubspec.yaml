@@ -40,8 +40,10 @@ dependencies:
   # Cámara / galería para fotos de puntos de control (evidencias)
   image_picker: ^1.1.2
 
-  # Audio: grabación con nivel/VU (validación de micrófono) + reproducción
-  record: ^5.1.2
+  # Audio: grabación con nivel/VU (validación de micrófono) + reproducción.
+  # record 7.x: cierre de dependencias federadas consistente (record_linux 2.x);
+  # 5.x fijaba record_linux a 0.7.x e incompatibilizaba con platform_interface nuevo.
+  record: ^7.1.1
   audioplayers: ^6.1.0
 
 dev_dependencies:
