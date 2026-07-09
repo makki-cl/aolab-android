@@ -37,18 +37,32 @@ class AuditSyncService extends ChangeNotifier {
       return;
     }
     _set(SyncStatus.syncing);
-    try {
-      await _uploadMedia();
-      await _push();
-      await _pull();
-      await masters.pull(); // refresca clientes/centros para los selectores
-      lastSyncAt = DateTime.now();
+    // Cada paso se aísla: si uno falla (p.ej. subir una evidencia), los demás
+    // siguen — así el PULL siempre trae las auditorías del servidor aunque el
+    // push/media fallen. Se acumulan los errores para mostrarlos en la UI.
+    final errors = <String>[];
+    Future<void> step(String name, Future<void> Function() run) async {
+      try {
+        await run();
+      } on DioException catch (e) {
+        final code = e.response?.statusCode;
+        if (code == 401) errors.add('sesión expirada (401) — cierra sesión y vuelve a entrar');
+        else errors.add('$name: ${code ?? ''} ${e.message ?? e.type.name}'.trim());
+      } catch (e) {
+        errors.add('$name: $e');
+      }
+    }
+
+    await step('media', _uploadMedia);
+    await step('subir', _push);
+    await step('bajar', _pull);
+    await step('maestros', masters.pull); // refresca clientes/centros para los selectores
+    lastSyncAt = DateTime.now();
+    if (errors.isEmpty) {
+      lastError = null;
       _set(SyncStatus.idle);
-    } on DioException catch (e) {
-      lastError = e.message;
-      _set(SyncStatus.error);
-    } catch (e) {
-      lastError = '$e';
+    } else {
+      lastError = errors.join(' · ');
       _set(SyncStatus.error);
     }
   }

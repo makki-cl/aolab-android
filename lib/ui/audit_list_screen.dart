@@ -111,7 +111,7 @@ class _AuditListScreenState extends State<AuditListScreen> {
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(24),
-          child: _StatusBar(status: sync.status, pending: _pending),
+          child: _StatusBar(status: sync.status, pending: _pending, lastError: sync.lastError),
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -206,24 +206,52 @@ class _StatusChip extends StatelessWidget {
 class _StatusBar extends StatelessWidget {
   final SyncStatus status;
   final int pending;
-  const _StatusBar({required this.status, required this.pending});
+  final String? lastError;
+  const _StatusBar({required this.status, required this.pending, this.lastError});
 
   @override
   Widget build(BuildContext context) {
+    final hasError = status == SyncStatus.error;
     final (text, color) = switch (status) {
       SyncStatus.syncing => ('Sincronizando…', Colors.blue),
       SyncStatus.offline => ('Sin conexión — se guarda localmente', Colors.grey),
-      SyncStatus.error => ('Error de sincronización', Colors.red),
+      SyncStatus.error => (
+          lastError == null ? 'Error de sincronización' : 'Error: $lastError',
+          Colors.red
+        ),
       SyncStatus.idle => (
           pending == 0 ? 'Todo sincronizado' : '$pending pendiente(s) por subir',
           pending == 0 ? Colors.green : Colors.orange
         ),
     };
-    return Container(
-      width: double.infinity,
-      color: color.withValues(alpha: 0.12),
-      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-      child: Text(text, style: TextStyle(color: color, fontSize: 12)),
+    return InkWell(
+      // En error, tocar la barra muestra el detalle completo (para diagnosticar/copiar).
+      onTap: hasError
+          ? () => showDialog<void>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('Detalle del error de sincronización'),
+                  content: SelectableText(lastError ?? 'Sin detalle disponible.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
+                  ],
+                ),
+              )
+          : null,
+      child: Container(
+        width: double.infinity,
+        color: color.withValues(alpha: 0.12),
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(text,
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: color, fontSize: 12)),
+            ),
+            if (hasError) const Icon(Icons.info_outline, size: 14, color: Colors.red),
+          ],
+        ),
+      ),
     );
   }
 }
