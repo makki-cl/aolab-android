@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
@@ -466,6 +467,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             ),
             _fotosRow(p),
             _audioRow(p),
+            _trashRow(p),
           ],
         ),
       );
@@ -521,7 +523,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                   icon: const Icon(Icons.graphic_eq, size: 18),
                   label: const Text('Probar micrófono')),
             ]),
-          for (final ev in p.audios) _audioItem(p, ev),
+          for (final ev in p.audios.where((a) => !a.isDeleted)) _audioItem(p, ev),
         ],
       ),
     );
@@ -630,11 +632,29 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     } catch (_) {}
   }
 
+  // Soft-delete a la papelera del punto (con confirmación). Se restaura o se purga al finalizar.
+  Future<bool> _confirmDelete(String tipo) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Eliminar $tipo'),
+        content: Text('¿Enviar $tipo a la papelera del punto? Podrás restaurarla hasta que finalices la auditoría.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Eliminar')),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _removeAudio(PuntoControl p, Evidencia ev) async {
-    await _media.remove(ev.id);
-    setState(() { p.audios.remove(ev); _silentAudios.remove(ev.id); });
+    if (!await _confirmDelete('audio')) return;
+    setState(() => ev.isDeleted = true);
     _scheduleSave();
   }
+
+  void _restoreEvidencia(Evidencia ev) { setState(() => ev.isDeleted = false); _scheduleSave(); }
 
   // ── Fotos del punto (cámara/galería, offline) ──
   Map<String, String> _authHeaders() {
@@ -645,7 +665,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _fotosRow(PuntoControl p) => Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Wrap(spacing: 8, runSpacing: 8, children: [
-          for (final ev in p.fotos) _thumb(p, ev),
+          for (final ev in p.fotos.where((f) => !f.isDeleted)) _thumb(p, ev),
           if (!_locked)
             InkWell(
               onTap: () => _addFoto(p),
@@ -678,7 +698,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     return SizedBox(
       width: 72, height: 72,
       child: Stack(clipBehavior: Clip.none, children: [
-        ClipRRect(borderRadius: BorderRadius.circular(8), child: img),
+        GestureDetector(
+          onTap: () => _openViewer(p, ev),
+          child: ClipRRect(borderRadius: BorderRadius.circular(8), child: img),
+        ),
         if (!ev.uploaded)
           const Positioned(bottom: 2, left: 2, child: Icon(Icons.cloud_upload_outlined, size: 16, color: Color(0xFFE0A030))),
         if (!_locked)
@@ -727,9 +750,89 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Future<void> _removeFoto(PuntoControl p, Evidencia ev) async {
-    await _media.remove(ev.id);
-    setState(() => p.fotos.remove(ev));
+    if (!await _confirmDelete('foto')) return;
+    setState(() => ev.isDeleted = true);
     _scheduleSave();
+  }
+
+  // Imagen de una evidencia foto (archivo local o servidor con auth).
+  Widget _photoImage(Evidencia ev, {BoxFit fit = BoxFit.cover, double? size}) {
+    final f = _media.fileFor(ev.id);
+    if (f.existsSync()) return Image.file(f, width: size, height: size, fit: fit);
+    return Image.network(
+      '${AppConfig.apiBaseUrl}/api/evidencias/${ev.id}',
+      width: size, height: size, fit: fit, headers: _authHeaders(),
+      errorBuilder: (_, __, ___) => Container(
+          width: size, height: size, color: const Color(0xFFF4F6FB),
+          child: const Icon(Icons.image_not_supported_outlined, color: Colors.grey)),
+    );
+  }
+
+  // Visor a pantalla completa con pinch-zoom (InteractiveViewer) y swipe/flechas entre fotos.
+  void _openViewer(PuntoControl p, Evidencia ev) {
+    final fotos = p.fotos.where((f) => !f.isDeleted).toList();
+    final idx = fotos.indexWhere((f) => f.id == ev.id);
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black,
+      builder: (_) => _PhotoViewerDialog(
+        fotos: fotos,
+        initialIndex: idx < 0 ? 0 : idx,
+        imageBuilder: (e) => _photoImage(e, fit: BoxFit.contain),
+      ),
+    );
+  }
+
+  // Papelera del punto: fotos/audios eliminados, con restaurar. Se purga al finalizar.
+  Widget _trashRow(PuntoControl p) {
+    final delFotos = p.fotos.where((f) => f.isDeleted).toList();
+    final delAudios = p.audios.where((a) => a.isDeleted).toList();
+    if (delFotos.isEmpty && delAudios.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 4),
+          leading: const Icon(Icons.delete_outline, size: 20, color: Color(0xFF556173)),
+          title: Text('Papelera (${delFotos.length + delAudios.length})',
+              style: const TextStyle(fontSize: 13, color: Color(0xFF556173), fontWeight: FontWeight.w600)),
+          children: [
+            for (final ev in delFotos) _trashItem(ev, isFoto: true),
+            for (final ev in delAudios) _trashItem(ev, isFoto: false),
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('La papelera se vacía al finalizar la auditoría.',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF8A93A2), fontStyle: FontStyle.italic)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _trashItem(Evidencia ev, {required bool isFoto}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(children: [
+        if (isFoto)
+          ClipRRect(borderRadius: BorderRadius.circular(4), child: SizedBox(width: 34, height: 34, child: _photoImage(ev, fit: BoxFit.cover, size: 34)))
+        else
+          const Icon(Icons.graphic_eq, size: 20, color: Color(0xFF556173)),
+        const SizedBox(width: 8),
+        Text(isFoto ? 'Foto' : 'Audio', style: const TextStyle(fontSize: 13)),
+        const Spacer(),
+        if (!_locked)
+          TextButton.icon(
+              onPressed: () => _restoreEvidencia(ev),
+              icon: const Icon(Icons.restore_from_trash, size: 18),
+              label: const Text('Restaurar')),
+      ]),
+    );
   }
 
   // ── Evaluación de terreno (matriz RPN): 4 dimensiones 1–5 con la escala descrita ──
@@ -893,7 +996,26 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         ],
       ),
     );
-    if (ok == true) await _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada');
+    if (ok == true) {
+      await _purgePapelera();
+      await _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada');
+    }
+  }
+
+  // Vacía la papelera de evidencias (isDeleted): las quita del documento y borra el binario
+  // local y del servidor (_media.remove hace ambos). Se llama al finalizar.
+  Future<void> _purgePapelera() async {
+    final a = _audit;
+    if (a == null) return;
+    for (final s in a.document.salas) {
+      for (final pc in s.puntosControl) {
+        for (final ev in [...pc.fotos.where((f) => f.isDeleted), ...pc.audios.where((x) => x.isDeleted)]) {
+          await _media.remove(ev.id);
+        }
+        pc.fotos.removeWhere((f) => f.isDeleted);
+        pc.audios.removeWhere((x) => x.isDeleted);
+      }
+    }
   }
 
   // ── Cabecera = IDENTIFICACIÓN ──
@@ -1098,7 +1220,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           initiallyExpanded: true,
           leading: const Icon(Icons.warehouse_outlined),
           title: Text(sala.name.isEmpty ? 'Sistema' : sala.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           children: [
             Row(children: [
               Expanded(
@@ -1250,6 +1372,92 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Visor de fotos a pantalla completa: pinch-zoom (InteractiveViewer), swipe entre fotos,
+/// flechas ‹ › (y teclado ← → / Esc), contador.
+class _PhotoViewerDialog extends StatefulWidget {
+  final List<Evidencia> fotos;
+  final int initialIndex;
+  final Widget Function(Evidencia) imageBuilder;
+  const _PhotoViewerDialog({required this.fotos, required this.initialIndex, required this.imageBuilder});
+
+  @override
+  State<_PhotoViewerDialog> createState() => _PhotoViewerDialogState();
+}
+
+class _PhotoViewerDialogState extends State<_PhotoViewerDialog> {
+  late final PageController _pc;
+  late int _i;
+
+  @override
+  void initState() {
+    super.initState();
+    _i = widget.initialIndex;
+    _pc = PageController(initialPage: _i);
+  }
+
+  @override
+  void dispose() {
+    _pc.dispose();
+    super.dispose();
+  }
+
+  void _go(int i) {
+    if (i < 0 || i >= widget.fotos.length) return;
+    _pc.animateToPage(i, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Focus(
+        autofocus: true,
+        onKeyEvent: (node, e) {
+          if (e is KeyDownEvent) {
+            if (e.logicalKey == LogicalKeyboardKey.arrowRight) { _go(_i + 1); return KeyEventResult.handled; }
+            if (e.logicalKey == LogicalKeyboardKey.arrowLeft) { _go(_i - 1); return KeyEventResult.handled; }
+            if (e.logicalKey == LogicalKeyboardKey.escape) { Navigator.pop(context); return KeyEventResult.handled; }
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Stack(children: [
+          PageView.builder(
+            controller: _pc,
+            itemCount: widget.fotos.length,
+            onPageChanged: (i) => setState(() => _i = i),
+            itemBuilder: (_, i) => InteractiveViewer(
+              minScale: 1,
+              maxScale: 5,
+              child: Center(child: widget.imageBuilder(widget.fotos[i])),
+            ),
+          ),
+          Positioned(
+              top: 36, right: 8,
+              child: IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 28), onPressed: () => Navigator.pop(context))),
+          if (_i > 0)
+            Positioned(
+                left: 4, top: 0, bottom: 0,
+                child: Center(child: IconButton(icon: const Icon(Icons.chevron_left, color: Colors.white70, size: 42), onPressed: () => _go(_i - 1)))),
+          if (_i < widget.fotos.length - 1)
+            Positioned(
+                right: 4, top: 0, bottom: 0,
+                child: Center(child: IconButton(icon: const Icon(Icons.chevron_right, color: Colors.white70, size: 42), onPressed: () => _go(_i + 1)))),
+          Positioned(
+            bottom: 28, left: 0, right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(12)),
+                child: Text('${_i + 1} / ${widget.fotos.length}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+              ),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }

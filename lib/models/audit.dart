@@ -57,8 +57,9 @@ class Evidencia {
   DateTime? capturedAtUtc;
   bool uploaded;
   String? transcripcion; // solo audio; se llena luego con la API de Claude
+  bool isDeleted; // soft-delete: papelera del punto; se purga al finalizar
 
-  Evidencia({required this.id, this.contentType, this.capturedAtUtc, this.uploaded = false, this.transcripcion});
+  Evidencia({required this.id, this.contentType, this.capturedAtUtc, this.uploaded = false, this.transcripcion, this.isDeleted = false});
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -66,6 +67,7 @@ class Evidencia {
         'capturedAtUtc': capturedAtUtc?.toUtc().toIso8601String(),
         'uploaded': uploaded,
         'transcripcion': transcripcion,
+        'isDeleted': isDeleted,
       };
 
   factory Evidencia.fromJson(Map<String, dynamic> j) => Evidencia(
@@ -74,6 +76,7 @@ class Evidencia {
         capturedAtUtc: j['capturedAtUtc'] != null ? DateTime.parse(j['capturedAtUtc'] as String) : null,
         uploaded: (j['uploaded'] ?? false) as bool,
         transcripcion: j['transcripcion'] as String?,
+        isDeleted: (j['isDeleted'] ?? false) as bool,
       );
 }
 
