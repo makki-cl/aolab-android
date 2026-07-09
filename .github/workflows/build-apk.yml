@@ -44,6 +44,9 @@ jobs:
           sed -i -E 's/applicationId = "[^"]+"/applicationId = "cl.makki.aolab.test"/' android/app/build.gradle.kts 2>/dev/null || true
           sed -i -E 's/applicationId "[^"]+"/applicationId "cl.makki.aolab.test"/' android/app/build.gradle 2>/dev/null || true
           sed -i -E 's/android:label="[^"]+"/android:label="Aolab Test"/' android/app/src/main/AndroidManifest.xml || true
+          # Permiso de micrófono para grabar audios de evidencia (además del que aporta el plugin record).
+          grep -q RECORD_AUDIO android/app/src/main/AndroidManifest.xml || \
+            sed -i 's#<application#<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application#' android/app/src/main/AndroidManifest.xml
           echo "== applicationId =="; grep -R "applicationId" android/app/build.gradle* || true
 
       - name: Compilar APK (release, apunta a dev.aolab.cl)

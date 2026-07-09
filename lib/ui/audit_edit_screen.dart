@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -36,6 +37,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   bool _saving = false;
   final Set<Answer> _showComment = {};
 
+  // Grabación de audio
+  PuntoControl? _recPunto;
+  double _recLevel = 0;
+  int _recSeconds = 0;
+  Timer? _recTimer;
+  final Set<String> _silentAudios = {};
+  final AudioPlayer _player = AudioPlayer();
+
   @override
   void initState() {
     super.initState();
@@ -47,6 +56,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _recTimer?.cancel();
+    if (_recPunto != null) _media.cancelRecording();
+    _player.dispose();
     _tab.dispose();
     super.dispose();
   }
@@ -453,10 +465,176 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               onChanged: (v) { p.comentario = v; _scheduleSave(); },
             ),
             _fotosRow(p),
-            // Audio + validación de micrófono: fase 5.
+            _audioRow(p),
           ],
         ),
       );
+
+  // ── Audio del punto: grabación con VU meter + validación de micrófono ──
+  Widget _audioRow(PuntoControl p) {
+    final recording = _recPunto == p;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (recording)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF5F5),
+                border: Border.all(color: const Color(0xFFF0C0C0)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(children: [
+                const Icon(Icons.mic, color: Colors.red, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: _recLevel,
+                      minHeight: 8,
+                      backgroundColor: const Color(0xFFE6E9F0),
+                      color: _recLevel < 0.12 ? Colors.red : (_recLevel < 0.3 ? Colors.orange : Colors.green),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text('${_recSeconds}s', style: const TextStyle(fontSize: 12, color: Color(0xFF556173))),
+                const SizedBox(width: 4),
+                IconButton(
+                    icon: const Icon(Icons.stop_circle, color: Colors.red),
+                    tooltip: 'Detener',
+                    onPressed: _stopRec),
+                IconButton(icon: const Icon(Icons.close, size: 20), tooltip: 'Cancelar', onPressed: _cancelRec),
+              ]),
+            )
+          else if (!_locked)
+            Wrap(spacing: 8, children: [
+              OutlinedButton.icon(
+                  onPressed: _recPunto == null ? () => _startRec(p) : null,
+                  icon: const Icon(Icons.mic, size: 18),
+                  label: const Text('Audio')),
+              OutlinedButton.icon(
+                  onPressed: _testMic,
+                  icon: const Icon(Icons.graphic_eq, size: 18),
+                  label: const Text('Probar micrófono')),
+            ]),
+          for (final ev in p.audios) _audioItem(p, ev),
+        ],
+      ),
+    );
+  }
+
+  Widget _audioItem(PuntoControl p, Evidencia ev) {
+    final local = _media.fileFor(ev.id).existsSync();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(children: [
+        IconButton(
+          icon: const Icon(Icons.play_circle_outline, color: Color(0xFF2D58FF)),
+          tooltip: local ? 'Reproducir' : 'Disponible en el servidor',
+          onPressed: local ? () => _playAudio(ev) : null,
+        ),
+        const Icon(Icons.graphic_eq, size: 18, color: Color(0xFF556173)),
+        const SizedBox(width: 6),
+        if (_silentAudios.contains(ev.id))
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(color: const Color(0xFFFFF3E0), borderRadius: BorderRadius.circular(6)),
+            child: const Text('sin voz detectada', style: TextStyle(fontSize: 11, color: Color(0xFFB7791F), fontWeight: FontWeight.w600)),
+          ),
+        const Spacer(),
+        if (!ev.uploaded) const Icon(Icons.cloud_upload_outlined, size: 16, color: Color(0xFFE0A030)),
+        if (!_locked)
+          IconButton(
+              icon: const Icon(Icons.auto_awesome, size: 20, color: Color(0xFF7C4DFF)),
+              tooltip: 'Transcribir con IA',
+              onPressed: () => _transcribirIA(p, ev)),
+        if (!_locked)
+          IconButton(
+              icon: const Icon(Icons.delete_outline, color: Colors.red),
+              onPressed: () => _removeAudio(p, ev)),
+      ]),
+    );
+  }
+
+  /// Transcripción del audio con IA (Claude). Aún no conectada: deja el texto
+  /// preparado para compilarse en el comentario del punto cuando se habilite Fase 6.
+  Future<void> _transcribirIA(PuntoControl p, Evidencia ev) async {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Transcripción con IA: disponible próximamente')),
+    );
+  }
+
+  Future<void> _startRec(PuntoControl p) async {
+    final ok = await _media.startRecording(onLevel: (l) {
+      if (mounted) setState(() => _recLevel = l);
+    });
+    if (!ok) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No se pudo acceder al micrófono. Revisa los permisos.')));
+      }
+      return;
+    }
+    setState(() { _recPunto = p; _recSeconds = 0; _recLevel = 0; });
+    _recTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _recSeconds++);
+    });
+  }
+
+  Future<void> _stopRec() async {
+    _recTimer?.cancel();
+    final p = _recPunto;
+    setState(() => _recPunto = null);
+    final res = await _media.stopRecording();
+    if (res.ev != null && p != null) {
+      setState(() {
+        p.audios.add(res.ev!);
+        if (res.silent) _silentAudios.add(res.ev!.id);
+      });
+      _scheduleSave();
+      if (res.silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            backgroundColor: Colors.orange,
+            content: Text('No se detectó voz. Revisa el micrófono y regraba si es necesario.')));
+      }
+    }
+  }
+
+  Future<void> _cancelRec() async {
+    _recTimer?.cancel();
+    await _media.cancelRecording();
+    if (mounted) setState(() => _recPunto = null);
+  }
+
+  Future<void> _testMic() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Probando micrófono…'), duration: Duration(milliseconds: 2300)));
+    final r = await _media.testMic();
+    if (!mounted) return;
+    final msg = r == null
+        ? 'Sin permiso de micrófono.'
+        : (r ? '✓ Micrófono OK, se detectó señal.' : '⚠ No se detectó señal. Revisa el micrófono.');
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: r == true ? Colors.green : Colors.orange));
+  }
+
+  Future<void> _playAudio(Evidencia ev) async {
+    try {
+      await _player.stop();
+      await _player.play(DeviceFileSource(_media.fileFor(ev.id).path));
+    } catch (_) {}
+  }
+
+  Future<void> _removeAudio(PuntoControl p, Evidencia ev) async {
+    await _media.remove(ev.id);
+    setState(() { p.audios.remove(ev); _silentAudios.remove(ev.id); });
+    _scheduleSave();
+  }
 
   // ── Fotos del punto (cámara/galería, offline) ──
   Map<String, String> _authHeaders() {

@@ -40,6 +40,10 @@ dependencies:
   # Cámara / galería para fotos de puntos de control (evidencias)
   image_picker: ^1.1.2
 
+  # Audio: grabación con nivel/VU (validación de micrófono) + reproducción
+  record: ^5.1.2
+  audioplayers: ^6.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

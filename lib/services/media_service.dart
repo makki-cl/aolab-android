@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/audit.dart';
@@ -15,6 +17,10 @@ import 'api_client.dart';
 class MediaService {
   final ApiClient api;
   final ImagePicker _picker = ImagePicker();
+  final AudioRecorder _recorder = AudioRecorder();
+  StreamSubscription<Amplitude>? _ampSub;
+  double _peakDb = -160;
+  String? _recId;
   String? _dirPath;
 
   MediaService({required this.api});
@@ -87,5 +93,65 @@ class MediaService {
     final f = fileFor(id);
     if (f.existsSync()) await f.delete();
     try { await api.dio.delete('/api/evidencias/$id'); } catch (_) {}
+  }
+
+  // ── Audio: grabación con nivel (VU) para validar micrófono ──
+
+  Future<bool> hasMicPermission() => _recorder.hasPermission();
+
+  /// Inicia la grabación; [onLevel] recibe el nivel 0..1 para el VU meter. false si no hay permiso.
+  Future<bool> startRecording({required void Function(double level) onLevel}) async {
+    if (!await _recorder.hasPermission()) return false;
+    await dirPath();
+    final id = const Uuid().v4();
+    _recId = id;
+    _peakDb = -160;
+    await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: fileFor(id).path);
+    _ampSub = _recorder.onAmplitudeChanged(const Duration(milliseconds: 150)).listen((a) {
+      if (a.current > _peakDb) _peakDb = a.current;
+      onLevel(((a.current + 50) / 50).clamp(0.0, 1.0)); // -50 dBFS..0 -> 0..1
+    });
+    return true;
+  }
+
+  /// Detiene y devuelve la evidencia + si quedó en silencio (posible problema de micrófono / sin voz).
+  Future<({Evidencia? ev, bool silent})> stopRecording() async {
+    await _ampSub?.cancel();
+    _ampSub = null;
+    final path = await _recorder.stop();
+    final id = _recId;
+    _recId = null;
+    if (path == null || id == null) return (ev: null, silent: false);
+    final silent = _peakDb < -40; // casi sin señal captada
+    final ev = Evidencia(id: id, contentType: 'audio/mp4', capturedAtUtc: DateTime.now().toUtc(), uploaded: false);
+    ev.uploaded = await _upload(id, fileFor(id), 'audio/mp4');
+    return (ev: ev, silent: silent);
+  }
+
+  Future<void> cancelRecording() async {
+    await _ampSub?.cancel();
+    _ampSub = null;
+    try {
+      final path = await _recorder.stop();
+      if (path != null) { final f = File(path); if (f.existsSync()) await f.delete(); }
+    } catch (_) {}
+    _recId = null;
+  }
+
+  /// Prueba de micrófono (~2s): true si detectó señal, false si silencio, null si no hay permiso.
+  Future<bool?> testMic() async {
+    if (!await _recorder.hasPermission()) return null;
+    await dirPath();
+    final tmp = fileFor('mic-test').path;
+    var peak = -160.0;
+    await _recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc), path: tmp);
+    final sub = _recorder.onAmplitudeChanged(const Duration(milliseconds: 120)).listen((a) {
+      if (a.current > peak) peak = a.current;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 2200));
+    await _recorder.stop();
+    await sub.cancel();
+    try { final f = File(tmp); if (f.existsSync()) await f.delete(); } catch (_) {}
+    return peak > -40;
   }
 }
