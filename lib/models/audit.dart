@@ -139,6 +139,8 @@ class PuntoControl {
 class AuditSala {
   String id;
   String name;
+  String? tipo; // estándar (null = Sin Tipo)
+  bool fromMaster; // viene del maestro del centro: nombre y tipo inmutables en la auditoría
   bool isDeleted; // soft-delete recuperable
   Map<String, Answer> answers; // entrevista
   List<PuntoControl> puntosControl; // inspección RPN
@@ -146,6 +148,8 @@ class AuditSala {
   AuditSala({
     required this.id,
     this.name = '',
+    this.tipo,
+    this.fromMaster = false,
     this.isDeleted = false,
     Map<String, Answer>? answers,
     List<PuntoControl>? puntosControl,
@@ -155,6 +159,8 @@ class AuditSala {
   Map<String, dynamic> toJson() => {
         'id': id,
         'name': name,
+        'tipo': tipo,
+        'fromMaster': fromMaster,
         'isDeleted': isDeleted,
         'answers': answers.map((k, v) => MapEntry(k, v.toJson())),
         'puntosControl': puntosControl.map((p) => p.toJson()).toList(),
@@ -163,6 +169,8 @@ class AuditSala {
   factory AuditSala.fromJson(Map<String, dynamic> j) => AuditSala(
         id: (j['id'] ?? '') as String,
         name: (j['name'] ?? '') as String,
+        tipo: j['tipo'] as String?,
+        fromMaster: (j['fromMaster'] ?? false) as bool,
         isDeleted: (j['isDeleted'] ?? false) as bool,
         answers: ((j['answers'] ?? {}) as Map<String, dynamic>)
             .map((k, v) => MapEntry(k, Answer.fromJson((v ?? {}) as Map<String, dynamic>))),

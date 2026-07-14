@@ -8,7 +8,7 @@ import '../models/master.dart';
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 5;
+  static const _dbVersion = 6;
 
   Database? _db;
 
@@ -43,6 +43,12 @@ class AppDatabase {
         if (oldV < 5) {
           // Serie de auditorías (seguimiento). try/catch por si oldV<2 ya recreó audits con la columna.
           try { await db.execute('ALTER TABLE audits ADD COLUMN previous_audit_id TEXT;'); } catch (_) {}
+        }
+        if (oldV < 6) {
+          // Sistemas del maestro por centro (nombre+tipo). Se resetea el cursor de centros
+          // para re-bajarlos con los sistemas.
+          try { await db.execute('ALTER TABLE centers ADD COLUMN sistemas TEXT;'); } catch (_) {}
+          try { await db.delete('kv', where: 'key = ?', whereArgs: ['center_cursor']); } catch (_) {}
         }
       },
     );
@@ -95,6 +101,7 @@ class AppDatabase {
         longitude       REAL,
         owner_client_id TEXT,
         operator_name   TEXT,
+        sistemas        TEXT,
         is_active       INTEGER NOT NULL DEFAULT 1,
         is_deleted      INTEGER NOT NULL DEFAULT 0,
         server_version  INTEGER NOT NULL DEFAULT 0

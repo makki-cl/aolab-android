@@ -77,7 +77,8 @@ class _AuditListScreenState extends State<AuditListScreen> {
       id: const Uuid().v4(),
       createdAtUtc: now,
       updatedAtUtc: now,
-      document: AuditDocument(salas: [AuditSala(id: const Uuid().v4(), name: 'Sala 1')]),
+      // createdByName lo resuelve el servidor (nombre completo del usuario) al pushear.
+      document: AuditDocument(), // los sistemas se eligen en la pestaña Sistemas
     );
     await db.upsertLocal(audit);
     await _open(audit.id);

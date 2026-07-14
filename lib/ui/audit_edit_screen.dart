@@ -46,12 +46,28 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   final Set<String> _silentAudios = {};
   final AudioPlayer _player = AudioPlayer();
 
+  // Formulario de "sistema adicional" (pestaña Sistemas).
+  final TextEditingController _newSalaName = TextEditingController();
+  String? _newSalaTipo;
+
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 2, vsync: this);
+    _tab = TabController(length: 4, vsync: this);
+    _tab.addListener(_onTabChanged);
     _media = context.read<MediaService>();
     _load();
+  }
+
+  // Gating: Entrevista (2) y Auditoría RPN (3) requieren centro asignado.
+  void _onTabChanged() {
+    if (_tab.indexIsChanging && _tab.index >= 2 && (_audit?.centerId == null)) {
+      _tab.animateTo(1); // vuelve a Sistemas
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Selecciona el centro en Identificación')));
+      }
+    }
   }
 
   @override
@@ -60,6 +76,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _recTimer?.cancel();
     if (_recPunto != null) _media.cancelRecording();
     _player.dispose();
+    _newSalaName.dispose();
+    _tab.removeListener(_onTabChanged);
     _tab.dispose();
     super.dispose();
   }
@@ -112,9 +130,24 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final a = _audit!;
     a.centerId = id;
     if (id != null) a.centerName = _centers.firstWhere((x) => x.id == id).name;
+    _ensureDefaultSistemas();
     setState(() {});
     _scheduleSave();
   }
+
+  // Centro (CenterRef) actualmente asignado, si sigue en el maestro.
+  CenterRef? get _center {
+    final id = _audit?.centerId;
+    if (id == null) return null;
+    for (final c in _centers) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  // Sistemas del maestro del centro asignado (para marcar cuáles se auditan).
+  List<Sistema> get _masterSistemas =>
+      (_center?.sistemas ?? []).where((s) => s.nombre.trim().isNotEmpty).toList();
 
   void _pickType(int? t) {
     _audit!.type = t ?? 0;
@@ -145,13 +178,72 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _scheduleSave();
   }
 
-  // ── Salas ──
-  void _addSala() {
+  // ── Sistemas (salas) ──
+  // Crea un AuditSala e inicializa sus respuestas por sección.
+  AuditSala _newSala(String name, {String? tipo, bool fromMaster = false}) {
+    final sala = AuditSala(id: const Uuid().v4(), name: name, tipo: tipo, fromMaster: fromMaster);
+    for (final sec in _tpl!.salaSections) {
+      for (final q in sec.questions) {
+        sala.answers.putIfAbsent(q.code, () => Answer());
+      }
+    }
+    _audit!.document.salas.add(sala);
+    _scheduleSave();
+    return sala;
+  }
+
+  // AuditSala del maestro que corresponde a un sistema del maestro por nombre (activa o en papelera).
+  AuditSala? _masterSalaFor(String nombre) {
+    for (final s in _audit!.document.salas) {
+      if (s.fromMaster && s.name.trim().toLowerCase() == nombre.trim().toLowerCase()) return s;
+    }
+    return null;
+  }
+
+  // Marca/desmarca un sistema del maestro. Desmarcar hace soft-delete (conserva respuestas/puntos).
+  void _toggleMaster(Sistema m, bool include) {
+    final existing = _masterSalaFor(m.nombre);
     setState(() {
-      final n = _audit!.document.salas.where((s) => !s.isDeleted).length + 1;
-      _audit!.document.salas.add(AuditSala(id: const Uuid().v4(), name: 'Sistema $n'));
+      if (include) {
+        if (existing == null) {
+          _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
+        } else {
+          existing.isDeleted = false;
+          existing.name = m.nombre;
+          existing.tipo = m.tipo;
+        }
+      } else if (existing != null) {
+        existing.isDeleted = true;
+      }
     });
     _scheduleSave();
+  }
+
+  // Sistema ad-hoc (no viene del maestro): nombre y tipo editables en la auditoría.
+  void _addSalaNew() {
+    final name = _newSalaName.text.trim();
+    if (name.isEmpty) return;
+    setState(() {
+      _newSala(name, tipo: _newSalaTipo, fromMaster: false);
+      _newSalaName.clear();
+      _newSalaTipo = null;
+    });
+    _scheduleSave();
+  }
+
+  // Al asignar centro y si la auditoría aún no tiene sistemas: marca TODOS los del maestro por
+  // defecto; si el centro no tiene ninguno, crea un "Sistema 1" ad-hoc. No pisa selecciones previas.
+  void _ensureDefaultSistemas() {
+    final a = _audit;
+    if (a == null || a.centerId == null || a.document.salas.isNotEmpty) return;
+    final master = _masterSistemas;
+    if (master.isNotEmpty) {
+      for (final m in master) {
+        _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
+      }
+    } else {
+      _newSala('Sistema 1', fromMaster: false);
+    }
   }
 
   Future<void> _removeSala(AuditSala s) async {
@@ -296,9 +388,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         ],
         bottom: TabBar(
           controller: _tab,
-          tabs: const [
-            Tab(icon: Icon(Icons.question_answer_outlined), text: 'Entrevista'),
-            Tab(icon: Icon(Icons.fact_check_outlined), text: 'Auditoría RPN'),
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          tabs: [
+            const Tab(icon: Icon(Icons.badge_outlined), text: 'Identificación'),
+            const Tab(icon: Icon(Icons.warehouse_outlined), text: 'Sistemas'),
+            // Entrevista y RPN quedan atenuadas hasta que haya centro.
+            _gatedTab(Icons.question_answer_outlined, 'Entrevista', a.centerId != null),
+            _gatedTab(Icons.fact_check_outlined, 'Auditoría RPN', a.centerId != null),
           ],
         ),
       ),
@@ -308,13 +405,19 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           Expanded(
             child: TabBarView(
               controller: _tab,
-              children: [_entrevistaTab(a), _rpnTab(a)],
+              children: [_identificacionTab(a), _sistemasTab(a), _entrevistaTab(a), _rpnTab(a)],
             ),
           ),
         ],
       ),
     );
   }
+
+  // Tab con etiqueta atenuada cuando está deshabilitado (gating por centro).
+  Widget _gatedTab(IconData icon, String label, bool enabled) => Tab(
+        icon: Icon(icon, color: enabled ? null : Colors.grey.withValues(alpha: 0.5)),
+        child: Text(label, style: TextStyle(color: enabled ? null : Colors.grey.withValues(alpha: 0.5))),
+      );
 
   // Acciones al inicio: guardar + iniciar/finalizar.
   Widget _topActions(Audit a) => Padding(
@@ -337,8 +440,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         ]),
       );
 
-  // ── Pestaña 1: ENTREVISTA (el cuestionario) ──
-  Widget _entrevistaTab(Audit a) => ListView(
+  // ── Pestaña 1: IDENTIFICACIÓN (data general de la auditoría) ──
+  Widget _identificacionTab(Audit a) => ListView(
         padding: const EdgeInsets.all(12),
         children: [
           if (_locked)
@@ -351,25 +454,298 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               ),
             ),
           _headerCard(a),
-          for (final sec in _centerSections) _sectionCard(sec, a.document.center),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text('Sistemas (${a.document.salas.where((s) => !s.isDeleted).length})',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-              const Spacer(),
-              if (!_locked)
-                TextButton.icon(onPressed: _addSala, icon: const Icon(Icons.add_business), label: const Text('Agregar sistema')),
-            ],
-          ),
-          for (final sala in a.document.salas.where((s) => !s.isDeleted)) _salaCard(sala),
-          _deletedSalas(a),
           const SizedBox(height: 40),
         ],
       );
 
-  // ── Pestaña 2: AUDITORÍA RPN (puntos de control por sistema) ──
+  // ── Pestaña 3: ENTREVISTA (el cuestionario) ──
+  Widget _entrevistaTab(Audit a) {
+    if (a.centerId == null) return _needCenterNotice();
+    final activas = a.document.salas.where((s) => !s.isDeleted).toList();
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (_locked)
+          const Card(
+            color: Color(0xFFEFF3F6),
+            child: ListTile(
+              leading: Icon(Icons.lock_outline),
+              title: Text('Auditoría finalizada'),
+              subtitle: Text('Los datos quedan fijos (solo lectura).'),
+            ),
+          ),
+        for (final sec in _centerSections) _sectionCard(sec, a.document.center),
+        const SizedBox(height: 8),
+        if (activas.isEmpty)
+          const Card(
+            color: Color(0xFFEFF6FF),
+            child: ListTile(
+              leading: Icon(Icons.info_outline, color: Color(0xFF2D58FF)),
+              title: Text('Define los sistemas a auditar en la pestaña Sistemas.'),
+            ),
+          ),
+        for (final sala in activas) _salaCard(sala),
+        const SizedBox(height: 40),
+      ],
+    );
+  }
+
+  // Aviso cuando aún no hay centro: Entrevista/RPN dependen de él.
+  Widget _needCenterNotice() => ListView(
+        padding: const EdgeInsets.all(12),
+        children: const [
+          Card(
+            color: Color(0xFFFFF7E6),
+            child: ListTile(
+              leading: Icon(Icons.info_outline, color: Color(0xFFB7791F)),
+              title: Text('Define el centro en la pestaña Identificación'),
+              subtitle: Text('Los sistemas y su cuestionario dependen del centro asignado.'),
+            ),
+          ),
+        ],
+      );
+
+  // ── Pestaña 2: SISTEMAS (define los sistemas transversales a Entrevista y RPN) ──
+  Widget _sistemasTab(Audit a) {
+    final activos = a.document.salas.where((s) => !s.isDeleted).toList();
+    // Bloqueada: solo lectura de los sistemas auditados.
+    if (_locked) {
+      return ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Sistemas auditados',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 8),
+                  if (activos.isEmpty)
+                    const Text('Sin sistemas.', style: TextStyle(color: Colors.grey))
+                  else
+                    for (final s in activos) _sistemaReadonlyRow(s),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 40),
+        ],
+      );
+    }
+
+    final master = _masterSistemas;
+    final adhoc = activos.where((s) => !s.fromMaster).toList();
+    final eliminados = a.document.salas.where((s) => s.isDeleted && !s.fromMaster).toList();
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        const Text('Sistemas a auditar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        const Padding(
+          padding: EdgeInsets.only(top: 2, bottom: 12),
+          child: Text('Los sistemas son transversales: alimentan tanto la Entrevista como la Auditoría RPN.',
+              style: TextStyle(fontSize: 13, color: Color(0xFF556173))),
+        ),
+        if (a.centerId == null)
+          const Card(
+            color: Color(0xFFFFF7E6),
+            child: ListTile(
+              leading: Icon(Icons.info_outline, color: Color(0xFFB7791F)),
+              title: Text('Selecciona primero el centro en la pestaña Identificación.'),
+            ),
+          ),
+        // Sistemas del maestro del centro: marcar cuáles se auditan (nombre/tipo se editan en el centro).
+        if (master.isNotEmpty) _masterSistemasCard(master),
+        // Sistemas ad-hoc.
+        _adhocSistemasCard(adhoc),
+        if (activos.isEmpty)
+          const Card(
+            color: Color(0xFFEFF6FF),
+            child: ListTile(
+              leading: Icon(Icons.info_outline, color: Color(0xFF2D58FF)),
+              title: Text('Aún no hay sistemas seleccionados para esta auditoría.'),
+            ),
+          ),
+        // Papelera de sistemas ad-hoc eliminados.
+        if (eliminados.isNotEmpty) _deletedSalas(a),
+        const SizedBox(height: 40),
+      ],
+    );
+  }
+
+  // Fila de solo lectura de un sistema auditado (past-proof / bloqueada).
+  Widget _sistemaReadonlyRow(AuditSala s) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          const Icon(Icons.warehouse_outlined, size: 20, color: Color(0xFF2D58FF)),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(s.name.isEmpty ? 'Sistema' : s.name,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(width: 8),
+          _tipoChip(s.tipo),
+          const SizedBox(width: 6),
+          if (s.fromMaster)
+            const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey))
+          else
+            _badge('adicional', const Color(0xFF566873)),
+        ]),
+      );
+
+  // Chip del tipo (o "Sin Tipo").
+  Widget _tipoChip(String? tipo) {
+    final hasTipo = tipo != null && tipo.isNotEmpty;
+    final c = hasTipo ? const Color(0xFF2D58FF) : const Color(0xFF566873);
+    return _badge(hasTipo ? tipo : 'Sin Tipo', c);
+  }
+
+  // Bloque "Sistemas del centro" (maestro): checkbox por cada uno, nombre/tipo de solo lectura.
+  Widget _masterSistemasCard(List<Sistema> master) => Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Text('Sistemas del centro', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                const SizedBox(width: 8),
+                _badge('maestro', const Color(0xFF566873)),
+              ]),
+              const Padding(
+                padding: EdgeInsets.only(top: 2, bottom: 6),
+                child: Text('Marca los que se auditan. El nombre y el tipo solo se editan en el centro.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
+              ),
+              for (final m in master) _masterSistemaRow(m),
+            ],
+          ),
+        ),
+      );
+
+  Widget _masterSistemaRow(Sistema m) {
+    final current = _masterSalaFor(m.nombre);
+    final included = current != null && !current.isDeleted;
+    return Row(children: [
+      Checkbox(
+        value: included,
+        visualDensity: VisualDensity.compact,
+        onChanged: (v) => _toggleMaster(m, v ?? false),
+      ),
+      Icon(Icons.warehouse_outlined, size: 20, color: included ? const Color(0xFF2D58FF) : Colors.grey),
+      const SizedBox(width: 8),
+      Flexible(
+        child: Text(m.nombre,
+            style: TextStyle(
+                fontWeight: included ? FontWeight.w600 : FontWeight.w400,
+                color: included ? null : const Color(0xFF8A93A2))),
+      ),
+      const SizedBox(width: 8),
+      _tipoChip(m.tipo),
+    ]);
+  }
+
+  // Bloque "Sistemas adicionales" (ad-hoc): agregar + lista editable + papelera.
+  Widget _adhocSistemasCard(List<AuditSala> adhoc) => Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Sistemas adicionales', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              const Padding(
+                padding: EdgeInsets.only(top: 2, bottom: 10),
+                child: Text('Sistemas que no están en el centro. Estos sí puedes renombrar y retipar.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
+              ),
+              // Formulario de alta.
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  child: TextField(
+                    controller: _newSalaName,
+                    decoration: _dec().copyWith(hintText: 'Nombre del sistema'),
+                    onChanged: (_) => setState(() {}), // habilita/inhabilita Agregar
+                    onSubmitted: (_) => _addSalaNew(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 120,
+                  child: DropdownButtonFormField<String?>(
+                    value: _newSalaTipo,
+                    isExpanded: true,
+                    decoration: _dec(),
+                    onChanged: (v) => setState(() => _newSalaTipo = v),
+                    items: [
+                      const DropdownMenuItem<String?>(value: null, child: Text('Sin Tipo')),
+                      for (final t in kSistemaTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
+                    ],
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: _newSalaName.text.trim().isEmpty ? null : _addSalaNew,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Agregar'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (adhoc.isEmpty)
+                const Text('Sin sistemas adicionales.', style: TextStyle(color: Colors.grey))
+              else
+                for (final sala in adhoc) _adhocSistemaRow(sala),
+            ],
+          ),
+        ),
+      );
+
+  Widget _adhocSistemaRow(AuditSala sala) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 10),
+            child: Icon(Icons.warehouse_outlined, size: 20, color: Color(0xFF2D58FF)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextFormField(
+              key: ValueKey('adhocname-${sala.id}'),
+              initialValue: sala.name,
+              decoration: _dec().copyWith(hintText: 'Nombre del sistema'),
+              onChanged: (v) { sala.name = v; _scheduleSave(); },
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 120,
+            child: DropdownButtonFormField<String?>(
+              value: kSistemaTipos.contains(sala.tipo) ? sala.tipo : null,
+              isExpanded: true,
+              decoration: _dec(),
+              onChanged: (v) { setState(() => sala.tipo = v); _scheduleSave(); },
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('Sin Tipo')),
+                for (final t in kSistemaTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.red),
+            onPressed: () => _removeSala(sala),
+          ),
+        ]),
+      );
+
+  // ── Pestaña 4: AUDITORÍA RPN (puntos de control por sistema) ──
   Widget _rpnTab(Audit a) {
+    if (a.centerId == null) return _needCenterNotice();
     final sistemas = a.document.salas.where((s) => !s.isDeleted).toList();
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -378,13 +754,32 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           const Card(
             child: Padding(
               padding: EdgeInsets.all(16),
-              child: Text('Agrega sistemas en la pestaña Entrevista para inspeccionar sus puntos de control.'),
+              child: Text('Define los sistemas en la pestaña Sistemas para inspeccionar sus puntos de control.'),
             ),
           ),
         for (final sistema in sistemas) _sistemaRpnCard(sistema),
         const SizedBox(height: 40),
       ],
     );
+  }
+
+  // Título de un sistema (nombre + chip de tipo + candado si viene del maestro).
+  Widget _sistemaTitle(AuditSala sistema) {
+    final hasTipo = sistema.tipo != null && sistema.tipo!.isNotEmpty;
+    return Row(children: [
+      Flexible(
+        child: Text(sistema.name.isEmpty ? 'Sistema' : sistema.name,
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+      ),
+      if (hasTipo) ...[
+        const SizedBox(width: 8),
+        _badge(sistema.tipo!, const Color(0xFF2D58FF)),
+      ],
+      if (sistema.fromMaster) ...[
+        const SizedBox(width: 6),
+        const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey)),
+      ],
+    ]);
   }
 
   Widget _sistemaRpnCard(AuditSala sistema) {
@@ -401,8 +796,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           child: ExpansionTile(
             initiallyExpanded: true,
             leading: const Icon(Icons.warehouse_outlined),
-            title: Text(sistema.name.isEmpty ? 'Sistema' : sistema.name,
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+            title: _sistemaTitle(sistema),
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             children: [
               for (final p in puntos) _puntoCard(sistema, p),
@@ -1098,18 +1492,25 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                     ]),
                   ),
                 )),
-            // Centro
+            // Centro (bloqueada: snapshot past-proof, no el maestro en vivo)
             _labeled('ID-01', 'Centro',
-                DropdownButtonFormField<String?>(
-                  value: centerVal,
-                  isExpanded: true,
-                  decoration: _dec(),
-                  onChanged: _locked ? null : _pickCenter,
-                  items: [
-                    const DropdownMenuItem<String?>(value: null, child: Text('— Sin centro —')),
-                    for (final c in _centers) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
-                  ],
-                )),
+                _locked
+                    ? TextFormField(
+                        key: ValueKey('centro-${a.id}'),
+                        initialValue: a.centerName,
+                        readOnly: true,
+                        decoration: _dec(),
+                      )
+                    : DropdownButtonFormField<String?>(
+                        value: centerVal,
+                        isExpanded: true,
+                        decoration: _dec(),
+                        onChanged: _pickCenter,
+                        items: [
+                          const DropdownMenuItem<String?>(value: null, child: Text('— Sin centro —')),
+                          for (final c in _centers) DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+                        ],
+                      )),
             // Jefe de centro / responsable (ID-02)
             _labeled('ID-02', 'Jefe de centro / responsable',
                 TextFormField(
@@ -1176,9 +1577,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     );
   }
 
-  // ── Papelera de salas (recuperación de borrado accidental) ──
+  // ── Papelera de sistemas ad-hoc (los del maestro se recuperan re-marcando el checkbox) ──
   Widget _deletedSalas(Audit a) {
-    final deleted = a.document.salas.where((s) => s.isDeleted).toList();
+    final deleted = a.document.salas.where((s) => s.isDeleted && !s.fromMaster).toList();
     if (deleted.isEmpty || _locked) return const SizedBox.shrink();
     return Card(
       margin: const EdgeInsets.only(top: 6, bottom: 12),
@@ -1209,7 +1610,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     );
   }
 
-  // ── Sala colapsable completa ──
+  // ── Sala colapsable completa (Entrevista). El nombre/tipo se gestionan en la pestaña Sistemas. ──
   Widget _salaCard(AuditSala sala) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1219,26 +1620,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: ExpansionTile(
           initiallyExpanded: true,
           leading: const Icon(Icons.warehouse_outlined),
-          title: Text(sala.name.isEmpty ? 'Sistema' : sala.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+          title: _sistemaTitle(sala),
           childrenPadding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           children: [
-            Row(children: [
-              Expanded(
-                child: TextFormField(
-                  key: ValueKey('salaname-${sala.id}'),
-                  initialValue: sala.name,
-                  readOnly: _locked,
-                  decoration: _dec().copyWith(labelText: 'Nombre del sistema'),
-                  onChanged: (v) { sala.name = v; _scheduleSave(); },
-                ),
-              ),
-              if (!_locked)
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.red),
-                  onPressed: () => _removeSala(sala),
-                ),
-            ]),
-            const SizedBox(height: 8),
             for (final sec in _tpl!.salaSections) _sectionCard(sec, sala.answers, nested: true),
           ],
         ),

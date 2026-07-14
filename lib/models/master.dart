@@ -1,5 +1,20 @@
 /// Maestros read-only sincronizados desde la web (solo pull). Se usan para poblar
 /// los selectores de cliente/centro/auditor al crear/editar una auditoría en terreno.
+import 'dart:convert';
+
+/// Tipos de sistema estándar (lista fija; "Sin Tipo" se representa como null).
+const List<String> kSistemaTipos = ['FF', 'FRY', 'SMOLT'];
+
+/// Sistema (sala) predefinido de un centro: nombre + tipo estándar (null = Sin Tipo).
+class Sistema {
+  String nombre;
+  String? tipo;
+  Sistema({this.nombre = '', this.tipo});
+
+  Map<String, dynamic> toJson() => {'nombre': nombre, 'tipo': tipo};
+  factory Sistema.fromJson(Map<String, dynamic> j) =>
+      Sistema(nombre: (j['nombre'] ?? '') as String, tipo: j['tipo'] as String?);
+}
 
 /// Usuario del sistema (para elegir auditor).
 class UserRef {
@@ -81,6 +96,7 @@ class CenterRef {
   double? longitude;
   String? ownerClientId;
   String? operatorName;
+  List<Sistema> sistemas; // sistemas del maestro (nombre + tipo)
   bool isActive;
   bool isDeleted;
   int serverVersion;
@@ -93,10 +109,11 @@ class CenterRef {
     this.longitude,
     this.ownerClientId,
     this.operatorName,
+    List<Sistema>? sistemas,
     this.isActive = true,
     this.isDeleted = false,
     this.serverVersion = 0,
-  });
+  }) : sistemas = sistemas ?? [];
 
   Map<String, Object?> toRow() => {
         'id': id,
@@ -106,6 +123,7 @@ class CenterRef {
         'longitude': longitude,
         'owner_client_id': ownerClientId,
         'operator_name': operatorName,
+        'sistemas': jsonEncode(sistemas.map((s) => s.toJson()).toList()),
         'is_active': isActive ? 1 : 0,
         'is_deleted': isDeleted ? 1 : 0,
         'server_version': serverVersion,
@@ -119,6 +137,7 @@ class CenterRef {
         longitude: (r['longitude'] as num?)?.toDouble(),
         ownerClientId: r['owner_client_id'] as String?,
         operatorName: r['operator_name'] as String?,
+        sistemas: _decodeSistemas(r['sistemas'] as String?),
         isActive: (r['is_active'] as int? ?? 1) == 1,
         isDeleted: (r['is_deleted'] as int? ?? 0) == 1,
         serverVersion: (r['server_version'] as int?) ?? 0,
@@ -132,8 +151,22 @@ class CenterRef {
         longitude: (d['longitude'] as num?)?.toDouble(),
         ownerClientId: d['ownerClientId'] as String?,
         operatorName: d['operatorName'] as String?,
+        sistemas: ((d['sistemas'] ?? []) as List)
+            .map((e) => Sistema.fromJson((e ?? {}) as Map<String, dynamic>))
+            .toList(),
         isActive: (d['isActive'] ?? true) as bool,
         isDeleted: (d['isDeleted'] ?? false) as bool,
         serverVersion: (d['serverVersion'] ?? 0) as int,
       );
+
+  static List<Sistema> _decodeSistemas(String? raw) {
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return (jsonDecode(raw) as List)
+          .map((e) => Sistema.fromJson((e ?? {}) as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
 }
