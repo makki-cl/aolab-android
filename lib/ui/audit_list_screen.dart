@@ -75,6 +75,7 @@ class _AuditListScreenState extends State<AuditListScreen> {
     final now = DateTime.now().toUtc();
     final audit = Audit(
       id: const Uuid().v4(),
+      status: 3, // Agendada: el muestreo (folio/correlativos) se inicia después
       createdAtUtc: now,
       updatedAtUtc: now,
       // createdByName lo resuelve el servidor (nombre completo del usuario) al pushear.
