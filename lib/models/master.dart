@@ -3,17 +3,72 @@
 import 'dart:convert';
 
 /// Tipos de sistema estándar (lista fija; "Sin Tipo" se representa como null).
-const List<String> kSistemaTipos = ['FF', 'FRY', 'SMOLT'];
+const List<String> kSistemaTipos = ['FF', 'FRY', 'HATCHERY', 'SMOLT', 'PRE-SMOLT'];
 
-/// Sistema (sala) predefinido de un centro: nombre + tipo estándar (null = Sin Tipo).
+/// Afluentes estándar (lista fija, no editable por el usuario).
+const List<String> kAfluenteTipos = ['Dulce', 'Mar', 'Mixta'];
+
+/// Tipos estándar de punto de control (lista fija; "Sin Tipo" = null).
+const List<String> kPuntoControlTipos = [
+  'Make Up / Ingreso Afluente',
+  'Pre Rotatorio',
+  'Post Rotatorio',
+  'Pre UV',
+  'Post UV',
+  'Pre Filtro Arena',
+  'Post Filtro Arena',
+  'Ozono',
+  'Biofiltro',
+  'Trickling',
+  'Desgasificador',
+  'LHO / Oxigenación',
+  'Microfiltro',
+  'Estanque Cabecera',
+  'Estanque Acumulación / Reservorio',
+  'Interior Estanque',
+  'Cono',
+  'Efluente',
+  'Batea / Incubación',
+  'Pozo / Bomba',
+  'Chiller / Enfriamiento',
+  'Otro',
+];
+
+/// Definición de un punto de control en el maestro del centro: alias + tipo estándar.
+class PuntoControlDef {
+  String alias;
+  String? tipo;
+  PuntoControlDef({this.alias = '', this.tipo});
+
+  Map<String, dynamic> toJson() => {'alias': alias, 'tipo': tipo};
+  factory PuntoControlDef.fromJson(Map<String, dynamic> j) =>
+      PuntoControlDef(alias: (j['alias'] ?? '') as String, tipo: j['tipo'] as String?);
+}
+
+/// Sistema (sala) predefinido de un centro: nombre + tipo estándar (null = Sin Tipo),
+/// afluente del sistema (si el centro es "multi afluente") y sus puntos de control.
 class Sistema {
   String nombre;
   String? tipo;
-  Sistema({this.nombre = '', this.tipo});
+  String? afluente;
+  List<PuntoControlDef> puntosControl;
+  Sistema({this.nombre = '', this.tipo, this.afluente, List<PuntoControlDef>? puntosControl})
+      : puntosControl = puntosControl ?? [];
 
-  Map<String, dynamic> toJson() => {'nombre': nombre, 'tipo': tipo};
-  factory Sistema.fromJson(Map<String, dynamic> j) =>
-      Sistema(nombre: (j['nombre'] ?? '') as String, tipo: j['tipo'] as String?);
+  Map<String, dynamic> toJson() => {
+        'nombre': nombre,
+        'tipo': tipo,
+        'afluente': afluente,
+        'puntosControl': puntosControl.map((p) => p.toJson()).toList(),
+      };
+  factory Sistema.fromJson(Map<String, dynamic> j) => Sistema(
+        nombre: (j['nombre'] ?? '') as String,
+        tipo: j['tipo'] as String?,
+        afluente: j['afluente'] as String?,
+        puntosControl: ((j['puntosControl'] ?? []) as List)
+            .map((e) => PuntoControlDef.fromJson((e ?? {}) as Map<String, dynamic>))
+            .toList(),
+      );
 }
 
 /// Usuario del sistema (para elegir auditor).
@@ -96,7 +151,9 @@ class CenterRef {
   double? longitude;
   String? ownerClientId;
   String? operatorName;
-  List<Sistema> sistemas; // sistemas del maestro (nombre + tipo)
+  String? afluenteMode; // 'single' | 'multi' (null = single)
+  String? afluente; // afluente del centro cuando es "single"
+  List<Sistema> sistemas; // sistemas del maestro (nombre + tipo + afluente + puntos)
   bool isActive;
   bool isDeleted;
   int serverVersion;
@@ -109,6 +166,8 @@ class CenterRef {
     this.longitude,
     this.ownerClientId,
     this.operatorName,
+    this.afluenteMode,
+    this.afluente,
     List<Sistema>? sistemas,
     this.isActive = true,
     this.isDeleted = false,
@@ -123,6 +182,8 @@ class CenterRef {
         'longitude': longitude,
         'owner_client_id': ownerClientId,
         'operator_name': operatorName,
+        'afluente_mode': afluenteMode,
+        'afluente': afluente,
         'sistemas': jsonEncode(sistemas.map((s) => s.toJson()).toList()),
         'is_active': isActive ? 1 : 0,
         'is_deleted': isDeleted ? 1 : 0,
@@ -137,6 +198,8 @@ class CenterRef {
         longitude: (r['longitude'] as num?)?.toDouble(),
         ownerClientId: r['owner_client_id'] as String?,
         operatorName: r['operator_name'] as String?,
+        afluenteMode: r['afluente_mode'] as String?,
+        afluente: r['afluente'] as String?,
         sistemas: _decodeSistemas(r['sistemas'] as String?),
         isActive: (r['is_active'] as int? ?? 1) == 1,
         isDeleted: (r['is_deleted'] as int? ?? 0) == 1,
@@ -151,6 +214,8 @@ class CenterRef {
         longitude: (d['longitude'] as num?)?.toDouble(),
         ownerClientId: d['ownerClientId'] as String?,
         operatorName: d['operatorName'] as String?,
+        afluenteMode: d['afluenteMode'] as String?,
+        afluente: d['afluente'] as String?,
         sistemas: ((d['sistemas'] ?? []) as List)
             .map((e) => Sistema.fromJson((e ?? {}) as Map<String, dynamic>))
             .toList(),

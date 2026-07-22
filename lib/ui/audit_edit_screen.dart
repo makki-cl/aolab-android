@@ -192,6 +192,25 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     return sala;
   }
 
+  // Afluente del sistema al auditar: por sistema si el centro es "multi", si no el del centro (snapshot).
+  String? _afluenteSnapshot(Sistema m) =>
+      _center?.afluenteMode == 'multi' ? m.afluente : _center?.afluente;
+
+  // Agrega un sistema del maestro: copia tipo, afluente (snapshot) y sus puntos (fromMaster, past-proof).
+  AuditSala _addSalaFromMaster(Sistema m) {
+    final sala = _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
+    sala.afluente = _afluenteSnapshot(m);
+    for (final pd in m.puntosControl) {
+      sala.puntosControl.add(PuntoControl(
+        id: const Uuid().v4(),
+        nombre: pd.alias,
+        tipo: pd.tipo,
+        fromMaster: true,
+      ));
+    }
+    return sala;
+  }
+
   // AuditSala del maestro que corresponde a un sistema del maestro por nombre (activa o en papelera).
   AuditSala? _masterSalaFor(String nombre) {
     for (final s in _audit!.document.salas) {
@@ -206,11 +225,12 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     setState(() {
       if (include) {
         if (existing == null) {
-          _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
+          _addSalaFromMaster(m);
         } else {
           existing.isDeleted = false;
           existing.name = m.nombre;
           existing.tipo = m.tipo;
+          existing.afluente = _afluenteSnapshot(m);
         }
       } else if (existing != null) {
         existing.isDeleted = true;
@@ -239,7 +259,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final master = _masterSistemas;
     if (master.isNotEmpty) {
       for (final m in master) {
-        _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
+        _addSalaFromMaster(m);
       }
     } else {
       _newSala('Sistema 1', fromMaster: false);
@@ -346,6 +366,26 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: Text(text,
             style: TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
       );
+
+  // Chip de afluente (con gota). Null/vacío = no muestra nada.
+  Widget _afluenteChip(String? afluente) {
+    if (afluente == null || afluente.isEmpty) return const SizedBox.shrink();
+    const c = Color(0xFF0E7490);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.10),
+        border: Border.all(color: c.withValues(alpha: 0.34)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.water_drop_outlined, size: 11, color: c),
+        const SizedBox(width: 3),
+        Text(afluente,
+            style: const TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+      ]),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -587,6 +627,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           ),
           const SizedBox(width: 8),
           _tipoChip(s.tipo),
+          if (s.afluente != null && s.afluente!.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            _afluenteChip(s.afluente),
+          ],
           const SizedBox(width: 6),
           if (s.fromMaster)
             const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey))
@@ -629,6 +673,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _masterSistemaRow(Sistema m) {
     final current = _masterSalaFor(m.nombre);
     final included = current != null && !current.isDeleted;
+    final af = _afluenteSnapshot(m);
     return Row(children: [
       Checkbox(
         value: included,
@@ -645,6 +690,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       ),
       const SizedBox(width: 8),
       _tipoChip(m.tipo),
+      if (af != null && af.isNotEmpty) ...[
+        const SizedBox(width: 6),
+        _afluenteChip(af),
+      ],
+      if (m.puntosControl.isNotEmpty) ...[
+        const SizedBox(width: 6),
+        _badge('${m.puntosControl.length} pts', const Color(0xFF566873)),
+      ],
     ]);
   }
 
@@ -775,6 +828,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         const SizedBox(width: 8),
         _badge(sistema.tipo!, const Color(0xFF2D58FF)),
       ],
+      if (sistema.afluente != null && sistema.afluente!.isNotEmpty) ...[
+        const SizedBox(width: 6),
+        _afluenteChip(sistema.afluente),
+      ],
       if (sistema.fromMaster) ...[
         const SizedBox(width: 6),
         const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey)),
@@ -830,12 +887,25 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Encabezado del punto: chip de tipo (si tiene) + candado si viene del maestro.
+            if ((p.tipo != null && p.tipo!.isNotEmpty) || p.fromMaster) ...[
+              Row(children: [
+                if (p.tipo != null && p.tipo!.isNotEmpty) _badge(p.tipo!, const Color(0xFF2D58FF)),
+                if (p.fromMaster) ...[
+                  const SizedBox(width: 6),
+                  const Tooltip(
+                      message: 'Punto del maestro (nombre y tipo fijos)',
+                      child: Icon(Icons.lock, size: 15, color: Colors.grey)),
+                ],
+              ]),
+              const SizedBox(height: 6),
+            ],
             Row(children: [
               Expanded(
                 child: TextFormField(
                   key: ValueKey('pn-${p.id}'),
                   initialValue: p.nombre,
-                  readOnly: _locked,
+                  readOnly: _locked || p.fromMaster,
                   decoration: _dec().copyWith(hintText: 'Punto de muestreo (equipo / componente)'),
                   onChanged: (v) { p.nombre = v; _scheduleSave(); },
                 ),
@@ -845,6 +915,21 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                     icon: const Icon(Icons.delete_outline, color: Colors.red),
                     onPressed: () => _removePunto(sistema, p)),
             ]),
+            // Ad-hoc: selector de tipo estándar (el maestro define el de sus puntos).
+            if (!p.fromMaster && !_locked) ...[
+              const SizedBox(height: 6),
+              DropdownButtonFormField<String?>(
+                key: ValueKey('pt-${p.id}'),
+                value: kPuntoControlTipos.contains(p.tipo) ? p.tipo : null,
+                isExpanded: true,
+                decoration: _dec().copyWith(labelText: 'Tipo'),
+                onChanged: (v) { setState(() => p.tipo = v); _scheduleSave(); },
+                items: [
+                  const DropdownMenuItem<String?>(value: null, child: Text('Sin Tipo')),
+                  for (final t in kPuntoControlTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
+                ],
+              ),
+            ],
             const SizedBox(height: 6),
             _evalBlock(p),
             const SizedBox(height: 6),

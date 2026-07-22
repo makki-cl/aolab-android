@@ -85,6 +85,8 @@ class Evidencia {
 class PuntoControl {
   String id;
   String nombre;
+  String? tipo; // estándar (null = Sin Tipo)
+  bool fromMaster; // viene del maestro: nombre y tipo inmutables en la auditoría
   bool isDeleted;
   int? estadoOperacional; // O
   int? limpiezaBiofilm; // L
@@ -97,6 +99,8 @@ class PuntoControl {
   PuntoControl({
     required this.id,
     this.nombre = '',
+    this.tipo,
+    this.fromMaster = false,
     this.isDeleted = false,
     this.estadoOperacional,
     this.limpiezaBiofilm,
@@ -111,6 +115,8 @@ class PuntoControl {
   Map<String, dynamic> toJson() => {
         'id': id,
         'nombre': nombre,
+        'tipo': tipo,
+        'fromMaster': fromMaster,
         'isDeleted': isDeleted,
         'estadoOperacional': estadoOperacional,
         'limpiezaBiofilm': limpiezaBiofilm,
@@ -124,6 +130,8 @@ class PuntoControl {
   factory PuntoControl.fromJson(Map<String, dynamic> j) => PuntoControl(
         id: (j['id'] ?? '') as String,
         nombre: (j['nombre'] ?? '') as String,
+        tipo: j['tipo'] as String?,
+        fromMaster: (j['fromMaster'] ?? false) as bool,
         isDeleted: (j['isDeleted'] ?? false) as bool,
         estadoOperacional: j['estadoOperacional'] as int?,
         limpiezaBiofilm: j['limpiezaBiofilm'] as int?,
@@ -141,6 +149,7 @@ class AuditSala {
   String name;
   String? tipo; // estándar (null = Sin Tipo)
   bool fromMaster; // viene del maestro del centro: nombre y tipo inmutables en la auditoría
+  String? afluente; // snapshot del afluente del sistema al auditar
   bool isDeleted; // soft-delete recuperable
   Map<String, Answer> answers; // entrevista
   List<PuntoControl> puntosControl; // inspección RPN
@@ -150,6 +159,7 @@ class AuditSala {
     this.name = '',
     this.tipo,
     this.fromMaster = false,
+    this.afluente,
     this.isDeleted = false,
     Map<String, Answer>? answers,
     List<PuntoControl>? puntosControl,
@@ -161,6 +171,7 @@ class AuditSala {
         'name': name,
         'tipo': tipo,
         'fromMaster': fromMaster,
+        'afluente': afluente,
         'isDeleted': isDeleted,
         'answers': answers.map((k, v) => MapEntry(k, v.toJson())),
         'puntosControl': puntosControl.map((p) => p.toJson()).toList(),
@@ -171,6 +182,7 @@ class AuditSala {
         name: (j['name'] ?? '') as String,
         tipo: j['tipo'] as String?,
         fromMaster: (j['fromMaster'] ?? false) as bool,
+        afluente: j['afluente'] as String?,
         isDeleted: (j['isDeleted'] ?? false) as bool,
         answers: ((j['answers'] ?? {}) as Map<String, dynamic>)
             .map((k, v) => MapEntry(k, Answer.fromJson((v ?? {}) as Map<String, dynamic>))),
