@@ -305,6 +305,43 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  // ── Correlativos (llave con Bactiquant): 1..N por auditoría al iniciar el muestreo ──
+  bool get _hasCorrelativos =>
+      _audit?.document.salas.any((s) => s.puntosControl.any((p) => p.correlativo != null)) ?? false;
+
+  // Numera 1..N los puntos no borrados sin correlativo, en orden (sistema, punto), continuando
+  // desde el máximo ya asignado. Inmutable lo ya numerado (past-proof).
+  void _assignCorrelativos() {
+    final a = _audit;
+    if (a == null) return;
+    var maxC = 0;
+    for (final s in a.document.salas) {
+      for (final p in s.puntosControl) {
+        if (p.correlativo != null && p.correlativo! > maxC) maxC = p.correlativo!;
+      }
+    }
+    var next = maxC + 1;
+    for (final s in a.document.salas.where((s) => !s.isDeleted)) {
+      for (final p in s.puntosControl.where((p) => !p.isDeleted && p.correlativo == null)) {
+        p.correlativo = next++;
+      }
+    }
+  }
+
+  // Agendada → Borrador + numera los puntos (arranca el muestreo).
+  Future<void> _startAudit() async {
+    _assignCorrelativos();
+    await _setStatus(AuditStatus.draft.value, 'Auditoría iniciada');
+  }
+
+  // Inicia el muestreo de un borrador (spot): numera los puntos. El folio lo asigna el servidor al sincronizar.
+  Future<void> _startSampling() async {
+    setState(_assignCorrelativos);
+    await _saveNow();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Muestreo iniciado — los puntos quedaron numerados')));
+  }
+
   // ── Consultas adicionales ──
   bool _isOtro(TemplateQuestion q) => q.text.trim().toLowerCase() == 'otro';
   bool _sectionHasOtro(TemplateSection s) => s.questions.any(_isOtro);
@@ -468,9 +505,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           const SizedBox(width: 8),
           if (a.statusEnum == AuditStatus.scheduled)
             OutlinedButton.icon(
-                onPressed: () => _setStatus(AuditStatus.draft.value, 'Auditoría iniciada'),
+                onPressed: _startAudit,
                 icon: const Icon(Icons.play_arrow, size: 18),
                 label: const Text('Iniciar'))
+          else if (a.statusEnum == AuditStatus.draft && !_hasCorrelativos)
+            OutlinedButton.icon(
+                onPressed: _startSampling,
+                icon: const Icon(Icons.play_arrow, size: 18),
+                label: const Text('Iniciar muestreo'))
           else if (a.statusEnum == AuditStatus.draft)
             OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.green),
@@ -901,6 +943,18 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               const SizedBox(height: 6),
             ],
             Row(children: [
+              if (p.correlativo != null) ...[
+                Tooltip(
+                  message: 'Correlativo (Sample ID en Bactiquant)',
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                    decoration: BoxDecoration(color: const Color(0xFF2D58FF), borderRadius: BorderRadius.circular(6)),
+                    child: Text('${p.correlativo}',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 child: TextFormField(
                   key: ValueKey('pn-${p.id}'),
@@ -1476,6 +1530,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       ),
     );
     if (ok == true) {
+      _assignCorrelativos(); // seguridad: numera lo que quedó sin correlativo antes de cerrar
       await _purgePapelera();
       await _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada');
     }
@@ -1525,7 +1580,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             shape: const Border(),
             collapsedShape: const Border(),
-            title: _badge('IDENTIFICACIÓN', idc),
+            title: Row(children: [
+              _badge('IDENTIFICACIÓN', idc),
+              const Spacer(),
+              if (a.folio != null)
+                _badge('Folio ${a.folio}', const Color(0xFF2D58FF))
+              else if (_hasCorrelativos)
+                _badge('Folio pendiente', const Color(0xFF566873)),
+            ]),
             children: [
             // Tipo de auditoría
             _labeled(null, 'Tipo de auditoría',

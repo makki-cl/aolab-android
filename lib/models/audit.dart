@@ -85,6 +85,7 @@ class Evidencia {
 class PuntoControl {
   String id;
   String nombre;
+  int? correlativo; // 1..N por auditoría; se asigna al iniciar muestreo; es el Sample ID en Bactiquant
   String? tipo; // estándar (null = Sin Tipo)
   bool fromMaster; // viene del maestro: nombre y tipo inmutables en la auditoría
   bool isDeleted;
@@ -99,6 +100,7 @@ class PuntoControl {
   PuntoControl({
     required this.id,
     this.nombre = '',
+    this.correlativo,
     this.tipo,
     this.fromMaster = false,
     this.isDeleted = false,
@@ -115,6 +117,7 @@ class PuntoControl {
   Map<String, dynamic> toJson() => {
         'id': id,
         'nombre': nombre,
+        'correlativo': correlativo,
         'tipo': tipo,
         'fromMaster': fromMaster,
         'isDeleted': isDeleted,
@@ -130,6 +133,7 @@ class PuntoControl {
   factory PuntoControl.fromJson(Map<String, dynamic> j) => PuntoControl(
         id: (j['id'] ?? '') as String,
         nombre: (j['nombre'] ?? '') as String,
+        correlativo: j['correlativo'] as int?,
         tipo: j['tipo'] as String?,
         fromMaster: (j['fromMaster'] ?? false) as bool,
         isDeleted: (j['isDeleted'] ?? false) as bool,
@@ -224,6 +228,7 @@ class AuditDocument {
 class Audit {
   final String id; // GUID generado en el cliente (offline-safe)
   int status;
+  int? folio; // folio del informe (≥3000, inmutable); lo asigna el servidor al sincronizar
   int type; // 0=spot, 1=seguimiento
   String centerName;
   String? auditor;
@@ -244,6 +249,7 @@ class Audit {
   Audit({
     required this.id,
     this.status = 0,
+    this.folio,
     this.type = 0,
     this.centerName = '(sin nombre)',
     this.auditor,
@@ -270,6 +276,7 @@ class Audit {
   Map<String, Object?> toRow() => {
         'id': id,
         'status': status,
+        'folio': folio,
         'type': type,
         'center_name': centerName,
         'auditor': auditor,
@@ -291,6 +298,7 @@ class Audit {
   factory Audit.fromRow(Map<String, Object?> r) => Audit(
         id: r['id'] as String,
         status: r['status'] as int,
+        folio: r['folio'] as int?,
         type: (r['type'] as int?) ?? 0,
         centerName: r['center_name'] as String,
         auditor: r['auditor'] as String?,
@@ -313,6 +321,7 @@ class Audit {
   Map<String, dynamic> toDto() => {
         'id': id,
         'status': status,
+        'folio': folio,
         'type': type,
         'centerName': centerName,
         'auditor': auditor,
@@ -333,6 +342,7 @@ class Audit {
   factory Audit.fromDto(Map<String, dynamic> d) => Audit(
         id: d['id'] as String,
         status: (d['status'] ?? 0) as int,
+        folio: d['folio'] as int?,
         type: (d['type'] ?? 0) as int,
         centerName: (d['centerName'] ?? '(sin nombre)') as String,
         auditor: d['auditor'] as String?,

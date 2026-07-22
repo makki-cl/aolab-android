@@ -97,7 +97,7 @@ class AuditSyncService extends ChangeNotifier {
     final results = (res.data['results'] as List).cast<Map<String, dynamic>>();
     for (final r in results) {
       if ((r['status'] as int) == 0) {
-        await db.markSynced(r['id'] as String, (r['serverVersion'] ?? 0) as int);
+        await db.markSynced(r['id'] as String, (r['serverVersion'] ?? 0) as int, folio: r['folio'] as int?);
       }
       // Conflict/Rejected se resuelven en el pull siguiente (gana el servidor).
     }

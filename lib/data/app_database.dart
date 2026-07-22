@@ -8,7 +8,7 @@ import '../models/master.dart';
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 7;
+  static const _dbVersion = 8;
 
   Database? _db;
 
@@ -57,6 +57,12 @@ class AppDatabase {
           try { await db.execute('ALTER TABLE centers ADD COLUMN afluente TEXT;'); } catch (_) {}
           try { await db.delete('kv', where: 'key = ?', whereArgs: ['center_cursor']); } catch (_) {}
         }
+        if (oldV < 8) {
+          // Folio del informe (lo asigna el servidor). El correlativo del punto viaja en el
+          // documento jsonb. Se resetea el cursor para re-bajar auditorías con folio.
+          try { await db.execute('ALTER TABLE audits ADD COLUMN folio INTEGER;'); } catch (_) {}
+          try { await db.delete('kv', where: 'key = ?', whereArgs: ['pull_cursor']); } catch (_) {}
+        }
       },
     );
   }
@@ -66,6 +72,7 @@ class AppDatabase {
       CREATE TABLE audits (
         id              TEXT PRIMARY KEY,
         status          INTEGER NOT NULL DEFAULT 0,
+        folio           INTEGER,
         type            INTEGER NOT NULL DEFAULT 0,
         center_name     TEXT NOT NULL,
         auditor         TEXT,
@@ -221,10 +228,12 @@ class AppDatabase {
     await db.insert('audits', a.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<void> markSynced(String id, int serverVersion) async {
+  Future<void> markSynced(String id, int serverVersion, {int? folio}) async {
     final db = await database;
-    await db.update('audits', {'dirty': 0, 'server_version': serverVersion},
-        where: 'id = ?', whereArgs: [id]);
+    final values = <String, Object?>{'dirty': 0, 'server_version': serverVersion};
+    // Folio: lo asigna el servidor al recibir la auditoría iniciada (inmutable, no se pisa si no viene).
+    if (folio != null) values['folio'] = folio;
+    await db.update('audits', values, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<int> pendingCount() async {
