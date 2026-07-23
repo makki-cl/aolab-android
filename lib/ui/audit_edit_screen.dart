@@ -196,19 +196,39 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   String? _afluenteSnapshot(Sistema m) =>
       _center?.afluenteMode == 'multi' ? m.afluente : _center?.afluente;
 
-  // Agrega un sistema del maestro: copia tipo, afluente (snapshot) y sus puntos (fromMaster, past-proof).
+  // Agrega un sistema del maestro (sin puntos: se seleccionan individualmente).
   AuditSala _addSalaFromMaster(Sistema m) {
     final sala = _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
     sala.afluente = _afluenteSnapshot(m);
-    for (final pd in m.puntosControl) {
-      sala.puntosControl.add(PuntoControl(
-        id: const Uuid().v4(),
-        nombre: pd.alias,
-        tipo: pd.tipo,
-        fromMaster: true,
-      ));
-    }
     return sala;
+  }
+
+  // ¿El punto del maestro (por alias) está seleccionado (presente y no borrado) en el sistema?
+  bool _puntoIncluido(AuditSala sala, String alias) => sala.puntosControl.any((p) =>
+      !p.isDeleted && p.fromMaster && p.nombre.trim().toLowerCase() == alias.trim().toLowerCase());
+
+  // Marca/desmarca un punto del maestro a auditar. Desmarcar = soft-delete.
+  void _togglePunto(AuditSala sala, PuntoControlDef pd, bool include) {
+    final existing = sala.puntosControl.where((p) =>
+        p.fromMaster && p.nombre.trim().toLowerCase() == pd.alias.trim().toLowerCase());
+    setState(() {
+      if (include) {
+        if (existing.isEmpty) {
+          sala.puntosControl.add(PuntoControl(id: const Uuid().v4(), nombre: pd.alias, tipo: pd.tipo, fromMaster: true));
+        } else {
+          existing.first.isDeleted = false;
+        }
+      } else if (existing.isNotEmpty) {
+        existing.first.isDeleted = true;
+      }
+    });
+    _scheduleSave();
+  }
+
+  // Agrega un punto adicional (no detectado) al sistema.
+  void _addPuntoAdhoc(AuditSala sala) {
+    setState(() => sala.puntosControl.add(PuntoControl(id: const Uuid().v4())));
+    _scheduleSave();
   }
 
   // AuditSala del maestro que corresponde a un sistema del maestro por nombre (activa o en papelera).
@@ -251,20 +271,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _scheduleSave();
   }
 
-  // Al asignar centro y si la auditoría aún no tiene sistemas: marca TODOS los del maestro por
-  // defecto; si el centro no tiene ninguno, crea un "Sistema 1" ad-hoc. No pisa selecciones previas.
-  void _ensureDefaultSistemas() {
-    final a = _audit;
-    if (a == null || a.centerId == null || a.document.salas.isNotEmpty) return;
-    final master = _masterSistemas;
-    if (master.isNotEmpty) {
-      for (final m in master) {
-        _addSalaFromMaster(m);
-      }
-    } else {
-      _newSala('Sistema 1', fromMaster: false);
-    }
-  }
+  // Los sistemas ya NO se auto-seleccionan: el auditor elige cuáles sistemas y qué puntos auditar.
+  void _ensureDefaultSistemas() {}
 
   Future<void> _removeSala(AuditSala s) async {
     final ok = await showDialog<bool>(
@@ -716,32 +724,84 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final current = _masterSalaFor(m.nombre);
     final included = current != null && !current.isDeleted;
     final af = _afluenteSnapshot(m);
-    return Row(children: [
-      Checkbox(
-        value: included,
-        visualDensity: VisualDensity.compact,
-        onChanged: (v) => _toggleMaster(m, v ?? false),
-      ),
-      Icon(Icons.warehouse_outlined, size: 20, color: included ? const Color(0xFF2D58FF) : Colors.grey),
-      const SizedBox(width: 8),
-      Flexible(
-        child: Text(m.nombre,
-            style: TextStyle(
-                fontWeight: included ? FontWeight.w600 : FontWeight.w400,
-                color: included ? null : const Color(0xFF8A93A2))),
-      ),
-      const SizedBox(width: 8),
-      _tipoChip(m.tipo),
-      if (af != null && af.isNotEmpty) ...[
+    final sel = current == null ? 0 : current.puntosControl.where((p) => !p.isDeleted).length;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Checkbox(
+          value: included,
+          visualDensity: VisualDensity.compact,
+          onChanged: _locked ? null : (v) => _toggleMaster(m, v ?? false),
+        ),
+        Icon(Icons.warehouse_outlined, size: 20, color: included ? const Color(0xFF2D58FF) : Colors.grey),
         const SizedBox(width: 6),
-        _afluenteChip(af),
-      ],
-      if (m.puntosControl.isNotEmpty) ...[
+        Expanded(
+          child: Text(m.nombre,
+              style: TextStyle(
+                  fontWeight: included ? FontWeight.w600 : FontWeight.w400,
+                  color: included ? null : const Color(0xFF8A93A2))),
+        ),
         const SizedBox(width: 6),
-        _badge('${m.puntosControl.length} pts', const Color(0xFF566873)),
-      ],
+        _tipoChip(m.tipo),
+        if (af != null && af.isNotEmpty) ...[const SizedBox(width: 6), _afluenteChip(af)],
+        const SizedBox(width: 6),
+        _badge('$sel/${m.puntosControl.length}', included && sel > 0 ? const Color(0xFF2D58FF) : const Color(0xFF566873)),
+      ]),
+      if (included && current != null)
+        Padding(
+          padding: const EdgeInsets.only(left: 28, bottom: 6),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (final pd in m.puntosControl) _masterPuntoRow(current, pd),
+            for (final p in current.puntosControl.where((p) => !p.isDeleted && !p.fromMaster)) _adhocPuntoRow(current, p),
+            if (!_locked)
+              TextButton.icon(
+                onPressed: () => _addPuntoAdhoc(current),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Agregar punto adicional'),
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4), visualDensity: VisualDensity.compact),
+              ),
+          ]),
+        ),
     ]);
   }
+
+  Widget _masterPuntoRow(AuditSala sala, PuntoControlDef pd) {
+    final chk = _puntoIncluido(sala, pd.alias);
+    return Row(children: [
+      SizedBox(
+        width: 34, height: 34,
+        child: Checkbox(
+          value: chk,
+          visualDensity: VisualDensity.compact,
+          onChanged: _locked ? null : (v) => _togglePunto(sala, pd, v ?? false),
+        ),
+      ),
+      Expanded(child: Text(pd.alias, style: TextStyle(fontSize: 13, color: chk ? null : const Color(0xFF8A93A2)))),
+      if (pd.tipo != null && pd.tipo!.isNotEmpty) _badge(pd.tipo!, const Color(0xFF2D58FF)),
+    ]);
+  }
+
+  Widget _adhocPuntoRow(AuditSala sala, PuntoControl p) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(children: [
+          const Icon(Icons.add_circle_outline, size: 16, color: Color(0xFF556173)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: TextFormField(
+              key: ValueKey('adh-${p.id}'),
+              initialValue: p.nombre,
+              readOnly: _locked,
+              style: const TextStyle(fontSize: 13),
+              decoration: _dec().copyWith(hintText: 'Alias del punto adicional', isDense: true),
+              onChanged: (v) { p.nombre = v; _scheduleSave(); },
+            ),
+          ),
+          if (!_locked)
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+              onPressed: () { setState(() => sala.puntosControl.remove(p)); _scheduleSave(); },
+            ),
+        ]),
+      );
 
   // Bloque "Sistemas adicionales" (ad-hoc): agregar + lista editable + papelera.
   Widget _adhocSistemasCard(List<AuditSala> adhoc) => Card(
