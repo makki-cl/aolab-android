@@ -96,6 +96,10 @@ class PuntoControl {
   String? comentario;
   List<Evidencia> fotos;
   List<Evidencia> audios;
+  // Resultados de laboratorio (Bactiquant) que se cargan SOLO en la web. La app no los edita,
+  // pero debe transportarlos intactos: si no, al re-pushear borraría el trabajo del laboratorio.
+  Map<String, dynamic>? bacti;
+  Map<String, dynamic>? bactiHongos;
 
   PuntoControl({
     required this.id,
@@ -104,6 +108,8 @@ class PuntoControl {
     this.tipo,
     this.fromMaster = false,
     this.isDeleted = false,
+    this.bacti,
+    this.bactiHongos,
     this.estadoOperacional,
     this.limpiezaBiofilm,
     this.impactoPeces,
@@ -128,6 +134,8 @@ class PuntoControl {
         'comentario': comentario,
         'fotos': fotos.map((e) => e.toJson()).toList(),
         'audios': audios.map((e) => e.toJson()).toList(),
+        'bacti': bacti,
+        'bactiHongos': bactiHongos,
       };
 
   factory PuntoControl.fromJson(Map<String, dynamic> j) => PuntoControl(
@@ -144,6 +152,8 @@ class PuntoControl {
         comentario: j['comentario'] as String?,
         fotos: ((j['fotos'] ?? []) as List).map((e) => Evidencia.fromJson((e ?? {}) as Map<String, dynamic>)).toList(),
         audios: ((j['audios'] ?? []) as List).map((e) => Evidencia.fromJson((e ?? {}) as Map<String, dynamic>)).toList(),
+        bacti: j['bacti'] as Map<String, dynamic>?,
+        bactiHongos: j['bactiHongos'] as Map<String, dynamic>?,
       );
 }
 
