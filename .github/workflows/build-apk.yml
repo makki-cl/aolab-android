@@ -32,7 +32,12 @@ jobs:
 
       # El repo guarda solo lib/ + pubspec; aquí se generan las carpetas de plataforma.
       - name: Generar carpeta android
-        run: flutter create --org cl.makki --project-name aolab_android --platforms=android .
+        run: |
+          flutter create --org cl.makki --project-name aolab_android --platforms=android .
+          # 'flutter create' deja un test de plantilla que referencia MyApp (clase que esta app
+          # no tiene). El repo solo versiona lib/ + pubspec, así que se descarta ese archivo
+          # generado para que el análisis evalúe solo nuestro código.
+          rm -f test/widget_test.dart
 
       - name: Dependencias
         run: flutter pub get
