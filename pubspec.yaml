@@ -52,6 +52,14 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   flutter_launcher_icons: ^0.14.3
 
+# Sin pubspec.lock commiteado, el CI resuelve dependencias frescas en cada build y una
+# publicación nueva puede romperlo sin que cambie nuestro código. jni 1.0.1 (27-07-2026)
+# exige un Gradle/Kotlin más nuevo y falla con "Could not find method kotlin()" al evaluar
+# el proyecto :jni. Lo arrastra path_provider_android (jni: ^1.0.0); se fija en 1.0.0, la
+# versión con la que el build venía verde.
+dependency_overrides:
+  jni: 1.0.0
+
 flutter:
   uses-material-design: true
   assets:
