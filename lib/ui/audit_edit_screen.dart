@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
@@ -770,7 +769,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         const SizedBox(width: 6),
         _badge('$sel/${m.puntosControl.length}', included && sel > 0 ? const Color(0xFF2D58FF) : const Color(0xFF566873)),
       ]),
-      if (included && current != null)
+      if (included)
         Padding(
           padding: const EdgeInsets.only(left: 28, bottom: 6),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

@@ -34,6 +34,11 @@ jobs:
       - name: Dependencias
         run: flutter pub get
 
+      # Gate rápido: falla en ~1 min si hay errores/warnings, en vez de esperar el build completo.
+      # (los 'info' de estilo no cortan el build)
+      - name: Analizar código
+        run: flutter analyze --no-fatal-infos
+
       - name: Ícono de la app (AO + badge TEST)
         run: dart run flutter_launcher_icons
 
