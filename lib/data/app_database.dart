@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
@@ -254,6 +256,21 @@ class AppDatabase {
     final db = await database;
     await db.insert('kv', {'key': key, 'value': value}, conflictAlgorithm: ConflictAlgorithm.replace);
   }
+
+  // Catálogos del maestro (tipos de punto/sistema y afluentes) sincronizados de la web.
+  Future<Map<String, List<String>>> getCatalogs() async {
+    final raw = await getValue('catalogs');
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      return m.map((k, v) => MapEntry(k, ((v ?? []) as List).map((e) => e.toString()).toList()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> setCatalogs(Map<String, dynamic> catalogs) async =>
+      setValue('catalogs', jsonEncode(catalogs));
 
   Future<int> getCursor() async => int.tryParse(await getValue('pull_cursor') ?? '0') ?? 0;
   Future<void> setCursor(int value) async => setValue('pull_cursor', '$value');

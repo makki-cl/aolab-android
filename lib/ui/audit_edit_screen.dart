@@ -33,6 +33,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   List<ClientRef> _clients = [];
   List<CenterRef> _centers = [];
   List<UserRef> _users = [];
+  // Catálogos del maestro (sincronizados); si aún no sincroniza, se usan las listas embebidas.
+  List<String> _sistemaTipos = kSistemaTipos;
+  List<String> _puntoTipos = kPuntoControlTipos;
   bool _loading = true;
   Timer? _saveTimer;
   bool _saving = false;
@@ -89,6 +92,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _clients = await db.activeClients();
     _centers = await db.activeCenters();
     _users = await db.allUsers();
+    final cats = await db.getCatalogs();
+    final st = cats['sistema-tipo'] ?? const [];
+    final pt = cats['punto-tipo'] ?? const [];
+    if (st.isNotEmpty) _sistemaTipos = st;
+    if (pt.isNotEmpty) _puntoTipos = pt;
     await _media.dirPath(); // inicializa la carpeta local de evidencias
     if (mounted) setState(() => _loading = false);
   }
@@ -199,22 +207,31 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   // Agrega un sistema del maestro (sin puntos: se seleccionan individualmente).
   AuditSala _addSalaFromMaster(Sistema m) {
     final sala = _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
+    sala.masterId = m.id;              // vínculo estable con el maestro
     sala.afluente = _afluenteSnapshot(m);
     return sala;
   }
 
-  // ¿El punto del maestro (por alias) está seleccionado (presente y no borrado) en el sistema?
-  bool _puntoIncluido(AuditSala sala, String alias) => sala.puntosControl.any((p) =>
-      !p.isDeleted && p.fromMaster && p.nombre.trim().toLowerCase() == alias.trim().toLowerCase());
+  // Un punto del maestro se identifica por ALIAS + TIPO: un sistema puede tener dos puntos con el
+  // mismo alias distinguidos por el tipo (ej. "Rotatorio 100" Pre y Post).
+  bool _esMismoPunto(PuntoControl p, PuntoControlDef pd) {
+    if (pd.id.isNotEmpty && p.masterId == pd.id) return true;
+    if (p.masterId != null && p.masterId!.isNotEmpty) return false;
+    return p.nombre.trim().toLowerCase() == pd.alias.trim().toLowerCase() &&
+        (p.tipo ?? '').trim().toLowerCase() == (pd.tipo ?? '').trim().toLowerCase();
+  }
+
+  // ¿El punto del maestro está seleccionado (presente y no borrado) en el sistema?
+  bool _puntoIncluido(AuditSala sala, PuntoControlDef pd) => sala.puntosControl.any((p) =>
+      !p.isDeleted && p.fromMaster && _esMismoPunto(p, pd));
 
   // Marca/desmarca un punto del maestro a auditar. Desmarcar = soft-delete.
   void _togglePunto(AuditSala sala, PuntoControlDef pd, bool include) {
-    final existing = sala.puntosControl.where((p) =>
-        p.fromMaster && p.nombre.trim().toLowerCase() == pd.alias.trim().toLowerCase());
+    final existing = sala.puntosControl.where((p) => p.fromMaster && _esMismoPunto(p, pd));
     setState(() {
       if (include) {
         if (existing.isEmpty) {
-          sala.puntosControl.add(PuntoControl(id: const Uuid().v4(), nombre: pd.alias, tipo: pd.tipo, fromMaster: true));
+          sala.puntosControl.add(PuntoControl(id: const Uuid().v4(), masterId: pd.id, nombre: pd.alias, tipo: pd.tipo, fromMaster: true));
         } else {
           existing.first.isDeleted = false;
         }
@@ -232,16 +249,23 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   // AuditSala del maestro que corresponde a un sistema del maestro por nombre (activa o en papelera).
-  AuditSala? _masterSalaFor(String nombre) {
+  // Vínculo con el sistema del maestro: por Id (PK); para data anterior al Id, por nombre.
+  AuditSala? _masterSalaFor(Sistema m) {
+    if (m.id.isNotEmpty) {
+      for (final s in _audit!.document.salas) {
+        if (s.fromMaster && s.masterId == m.id) return s;
+      }
+    }
     for (final s in _audit!.document.salas) {
-      if (s.fromMaster && s.name.trim().toLowerCase() == nombre.trim().toLowerCase()) return s;
+      if (s.fromMaster && (s.masterId == null || s.masterId!.isEmpty) &&
+          s.name.trim().toLowerCase() == m.nombre.trim().toLowerCase()) return s;
     }
     return null;
   }
 
   // Marca/desmarca un sistema del maestro. Desmarcar hace soft-delete (conserva respuestas/puntos).
   void _toggleMaster(Sistema m, bool include) {
-    final existing = _masterSalaFor(m.nombre);
+    final existing = _masterSalaFor(m);
     setState(() {
       if (include) {
         if (existing == null) {
@@ -721,7 +745,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       );
 
   Widget _masterSistemaRow(Sistema m) {
-    final current = _masterSalaFor(m.nombre);
+    final current = _masterSalaFor(m);
     final included = current != null && !current.isDeleted;
     final af = _afluenteSnapshot(m);
     final sel = current == null ? 0 : current.puntosControl.where((p) => !p.isDeleted).length;
@@ -765,7 +789,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Widget _masterPuntoRow(AuditSala sala, PuntoControlDef pd) {
-    final chk = _puntoIncluido(sala, pd.alias);
+    final chk = _puntoIncluido(sala, pd);
     return Row(children: [
       SizedBox(
         width: 34, height: 34,
@@ -837,7 +861,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                     onChanged: (v) => setState(() => _newSalaTipo = v),
                     items: [
                       const DropdownMenuItem<String?>(value: null, child: Text('Sin Tipo')),
-                      for (final t in kSistemaTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
+                      for (final t in _sistemaTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
                     ],
                   ),
                 ),
@@ -881,13 +905,13 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           SizedBox(
             width: 120,
             child: DropdownButtonFormField<String?>(
-              value: kSistemaTipos.contains(sala.tipo) ? sala.tipo : null,
+              value: _sistemaTipos.contains(sala.tipo) ? sala.tipo : null,
               isExpanded: true,
               decoration: _dec(),
               onChanged: (v) { setState(() => sala.tipo = v); _scheduleSave(); },
               items: [
                 const DropdownMenuItem<String?>(value: null, child: Text('Sin Tipo')),
-                for (final t in kSistemaTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
+                for (final t in _sistemaTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
               ],
             ),
           ),
@@ -1034,13 +1058,13 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               const SizedBox(height: 6),
               DropdownButtonFormField<String?>(
                 key: ValueKey('pt-${p.id}'),
-                value: kPuntoControlTipos.contains(p.tipo) ? p.tipo : null,
+                value: _puntoTipos.contains(p.tipo) ? p.tipo : null,
                 isExpanded: true,
                 decoration: _dec().copyWith(labelText: 'Tipo'),
                 onChanged: (v) { setState(() => p.tipo = v); _scheduleSave(); },
                 items: [
                   const DropdownMenuItem<String?>(value: null, child: Text('Sin Tipo')),
-                  for (final t in kPuntoControlTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
+                  for (final t in _puntoTipos) DropdownMenuItem<String?>(value: t, child: Text(t)),
                 ],
               ),
             ],

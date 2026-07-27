@@ -14,6 +14,13 @@ class MasterSyncService {
     await _pullClients();
     await _pullCenters();
     await _pullUsers();
+    await _pullCatalogs();
+  }
+
+  // Catálogos (tipos de punto/sistema, afluentes): lista chica, se reemplaza completa.
+  Future<void> _pullCatalogs() async {
+    final res = await api.dio.get('/api/masters/catalogs');
+    if (res.data is Map) await db.setCatalogs((res.data as Map).cast<String, dynamic>());
   }
 
   // Usuarios: lista chica, se reemplaza completa (sin cursor).

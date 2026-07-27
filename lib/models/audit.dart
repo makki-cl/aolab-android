@@ -88,6 +88,7 @@ class PuntoControl {
   int? correlativo; // 1..N por auditoría; se asigna al iniciar muestreo; es el Sample ID en Bactiquant
   String? tipo; // estándar (null = Sin Tipo)
   bool fromMaster; // viene del maestro: nombre y tipo inmutables en la auditoría
+  String? masterId; // Id del punto en el maestro (vínculo estable)
   bool isDeleted;
   int? estadoOperacional; // O
   int? limpiezaBiofilm; // L
@@ -126,6 +127,7 @@ class PuntoControl {
         'correlativo': correlativo,
         'tipo': tipo,
         'fromMaster': fromMaster,
+        'masterId': masterId,
         'isDeleted': isDeleted,
         'estadoOperacional': estadoOperacional,
         'limpiezaBiofilm': limpiezaBiofilm,
@@ -144,6 +146,7 @@ class PuntoControl {
         correlativo: j['correlativo'] as int?,
         tipo: j['tipo'] as String?,
         fromMaster: (j['fromMaster'] ?? false) as bool,
+        masterId: j['masterId'] as String?,
         isDeleted: (j['isDeleted'] ?? false) as bool,
         estadoOperacional: j['estadoOperacional'] as int?,
         limpiezaBiofilm: j['limpiezaBiofilm'] as int?,
@@ -163,6 +166,7 @@ class AuditSala {
   String name;
   String? tipo; // estándar (null = Sin Tipo)
   bool fromMaster; // viene del maestro del centro: nombre y tipo inmutables en la auditoría
+  String? masterId; // Id del sistema en el maestro (vínculo estable)
   String? afluente; // snapshot del afluente del sistema al auditar
   bool isDeleted; // soft-delete recuperable
   Map<String, Answer> answers; // entrevista
@@ -173,6 +177,7 @@ class AuditSala {
     this.name = '',
     this.tipo,
     this.fromMaster = false,
+    this.masterId,
     this.afluente,
     this.isDeleted = false,
     Map<String, Answer>? answers,
@@ -185,6 +190,7 @@ class AuditSala {
         'name': name,
         'tipo': tipo,
         'fromMaster': fromMaster,
+        'masterId': masterId,
         'afluente': afluente,
         'isDeleted': isDeleted,
         'answers': answers.map((k, v) => MapEntry(k, v.toJson())),
@@ -196,6 +202,7 @@ class AuditSala {
         name: (j['name'] ?? '') as String,
         tipo: j['tipo'] as String?,
         fromMaster: (j['fromMaster'] ?? false) as bool,
+        masterId: j['masterId'] as String?,
         afluente: j['afluente'] as String?,
         isDeleted: (j['isDeleted'] ?? false) as bool,
         answers: ((j['answers'] ?? {}) as Map<String, dynamic>)

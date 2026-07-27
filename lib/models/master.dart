@@ -37,32 +37,39 @@ const List<String> kPuntoControlTipos = [
 
 /// Definición de un punto de control en el maestro del centro: alias + tipo estándar.
 class PuntoControlDef {
+  String id; // PK estable en el maestro (permite renombrar sin perder el vínculo)
   String alias;
   String? tipo;
-  PuntoControlDef({this.alias = '', this.tipo});
+  PuntoControlDef({this.id = '', this.alias = '', this.tipo});
 
-  Map<String, dynamic> toJson() => {'alias': alias, 'tipo': tipo};
-  factory PuntoControlDef.fromJson(Map<String, dynamic> j) =>
-      PuntoControlDef(alias: (j['alias'] ?? '') as String, tipo: j['tipo'] as String?);
+  Map<String, dynamic> toJson() => {'id': id, 'alias': alias, 'tipo': tipo};
+  factory PuntoControlDef.fromJson(Map<String, dynamic> j) => PuntoControlDef(
+        id: (j['id'] ?? '') as String,
+        alias: (j['alias'] ?? '') as String,
+        tipo: j['tipo'] as String?,
+      );
 }
 
 /// Sistema (sala) predefinido de un centro: nombre + tipo estándar (null = Sin Tipo),
 /// afluente del sistema (si el centro es "multi afluente") y sus puntos de control.
 class Sistema {
+  String id; // PK estable en el maestro
   String nombre;
   String? tipo;
   String? afluente;
   List<PuntoControlDef> puntosControl;
-  Sistema({this.nombre = '', this.tipo, this.afluente, List<PuntoControlDef>? puntosControl})
+  Sistema({this.id = '', this.nombre = '', this.tipo, this.afluente, List<PuntoControlDef>? puntosControl})
       : puntosControl = puntosControl ?? [];
 
   Map<String, dynamic> toJson() => {
+        'id': id,
         'nombre': nombre,
         'tipo': tipo,
         'afluente': afluente,
         'puntosControl': puntosControl.map((p) => p.toJson()).toList(),
       };
   factory Sistema.fromJson(Map<String, dynamic> j) => Sistema(
+        id: (j['id'] ?? '') as String,
         nombre: (j['nombre'] ?? '') as String,
         tipo: j['tipo'] as String?,
         afluente: j['afluente'] as String?,
