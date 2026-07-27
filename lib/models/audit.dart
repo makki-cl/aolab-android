@@ -108,6 +108,7 @@ class PuntoControl {
     this.correlativo,
     this.tipo,
     this.fromMaster = false,
+    this.masterId,
     this.isDeleted = false,
     this.bacti,
     this.bactiHongos,
