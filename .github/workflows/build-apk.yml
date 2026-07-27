@@ -22,8 +22,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Versión FIJA (no 'la stable del día'): junto con pubspec.lock hace el build reproducible
+      # y garantiza que lo que se verifica en la VM sea lo mismo que compila el CI.
       - uses: subosito/flutter-action@v2
         with:
+          flutter-version: 3.44.8
           channel: stable
           cache: true
 
