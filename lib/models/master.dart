@@ -3,7 +3,8 @@
 import 'dart:convert';
 
 /// Tipos de sistema estándar (lista fija; "Sin Tipo" se representa como null).
-const List<String> kSistemaTipos = ['FF', 'FRY', 'HATCHERY', 'SMOLT', 'PRE-SMOLT'];
+// Orden del proceso: agua de entrada → etapas de cultivo → agua de salida.
+const List<String> kSistemaTipos = ['AFLUENTE', 'HATCHERY', 'FF', 'FRY', 'PRE-SMOLT', 'SMOLT', 'EFLUENTE'];
 
 /// Afluentes estándar (lista fija, no editable por el usuario).
 const List<String> kAfluenteTipos = ['Dulce', 'Mar', 'Mixta'];
