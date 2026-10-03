@@ -10,7 +10,7 @@ import '../models/master.dart';
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 8;
+  static const _dbVersion = 9;
 
   Database? _db;
 
@@ -65,6 +65,20 @@ class AppDatabase {
           try { await db.execute('ALTER TABLE audits ADD COLUMN folio INTEGER;'); } catch (_) {}
           try { await db.delete('kv', where: 'key = ?', whereArgs: ['pull_cursor']); } catch (_) {}
         }
+        if (oldV < 9) {
+          // F3, modelo con equipos. (1) Los centros guardan la versión de su modelo, y su blob
+          // 'sistemas' trae ahora etapa, afluentes y, por punto, equipo, grupo y ubicación. Se
+          // resetea el cursor de centros para volver a bajar el maestro completo: sin eso, un centro
+          // que no cambió en el servidor seguiría con el blob viejo, sin grupos.
+          // (2) La cabecera de la auditoría guarda en 'extra' los campos que esta versión no
+          // conoce, para que la copia local quede completa (no se suben: ver llaves_ajenas.dart).
+          // NO se resetea 'pull_cursor': volver a bajar todas las auditorías pisaría las que
+          // quedaron sin subir si el push falló. No hace falta, porque el servidor conserva lo que
+          // el push no trae (fusión de F0); 'extra' se llena la próxima vez que cada una cambie.
+          try { await db.execute('ALTER TABLE centers ADD COLUMN modelo_version INTEGER NOT NULL DEFAULT 1;'); } catch (_) {}
+          try { await db.execute('ALTER TABLE audits ADD COLUMN extra TEXT;'); } catch (_) {}
+          try { await db.delete('kv', where: 'key = ?', whereArgs: ['center_cursor']); } catch (_) {}
+        }
       },
     );
   }
@@ -86,6 +100,7 @@ class AppDatabase {
         scheduled_for   TEXT,
         previous_audit_id TEXT,
         document        TEXT NOT NULL,
+        extra           TEXT,
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL,
         is_deleted      INTEGER NOT NULL DEFAULT 0,
@@ -120,6 +135,7 @@ class AppDatabase {
         afluente_mode   TEXT,
         afluente        TEXT,
         sistemas        TEXT,
+        modelo_version  INTEGER NOT NULL DEFAULT 1,
         is_active       INTEGER NOT NULL DEFAULT 1,
         is_deleted      INTEGER NOT NULL DEFAULT 0,
         server_version  INTEGER NOT NULL DEFAULT 0

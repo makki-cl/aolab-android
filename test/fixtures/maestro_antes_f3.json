@@ -1,0 +1,709 @@
+{
+  "centers": [
+    {
+      "id": "3fc66827-61f7-4c75-99b1-22e986e063a9",
+      "name": "DEMO SEGUIMIENTO",
+      "code": null,
+      "latitude": null,
+      "longitude": null,
+      "ownerClientId": null,
+      "operatorName": null,
+      "isActive": true,
+      "salas": [
+        "SMOLT - 1",
+        "SMOLT - 2",
+        "FF - 1"
+      ],
+      "sistemas": [
+        {
+          "id": "117bb00e-3568-25fd-c15e-d76ed9f67be5",
+          "nombre": "SMOLT - 1",
+          "tipo": "SMOLT",
+          "afluente": null,
+          "puntosControl": []
+        },
+        {
+          "id": "cd7d644c-3d1c-258f-4732-a4f1832a8a1e",
+          "nombre": "SMOLT - 2",
+          "tipo": "SMOLT",
+          "afluente": null,
+          "puntosControl": []
+        },
+        {
+          "id": "8f1dd80d-7a8b-f4dc-bc00-821778236611",
+          "nombre": "FF - 1",
+          "tipo": "FF",
+          "afluente": null,
+          "puntosControl": []
+        }
+      ],
+      "afluenteMode": null,
+      "afluente": null,
+      "updatedAtUtc": "2026-10-02T12:00:00\u002B00:00",
+      "isDeleted": false,
+      "serverVersion": 2400
+    },
+    {
+      "id": "5b738314-c155-406b-bc5a-56edcb5f9b40",
+      "name": "BERNARDINO",
+      "code": null,
+      "latitude": null,
+      "longitude": null,
+      "ownerClientId": null,
+      "operatorName": null,
+      "isActive": true,
+      "salas": [
+        "Incubaci\u00F3n",
+        "Sala 100"
+      ],
+      "sistemas": [
+        {
+          "id": "09e38d8e-8af4-44f8-b68f-0533e2e86f8e",
+          "nombre": "Incubaci\u00F3n",
+          "tipo": "HATCHERY",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "f7dd9cb0-f4d5-4c14-9cb9-e1cf7da91a67",
+              "alias": "Pre UV 1",
+              "tipo": "Pre UV"
+            },
+            {
+              "id": "6f67719a-c070-4de0-9e10-32d6074f22b1",
+              "alias": "Post UV 1",
+              "tipo": "Post UV"
+            },
+            {
+              "id": "55c2e115-5085-4dd9-a8e0-7269a90f549a",
+              "alias": "Batea 1",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "4d6000e9-ac55-4a0d-8be3-71671f7cc99a",
+              "alias": "Batea 2",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "fd276915-0aae-485c-8e5e-ebfff682e16b",
+              "alias": "Batea 3",
+              "tipo": "Batea / Incubaci\u00F3n"
+            }
+          ]
+        },
+        {
+          "id": "72147e11-4992-458a-8208-a4722f320b8b",
+          "nombre": "Sala 100",
+          "tipo": "FF",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "5358bd92-c6e4-455a-ad02-f253f45df3e1",
+              "alias": "Rotatorio 100",
+              "tipo": "Pre Rotatorio"
+            },
+            {
+              "id": "f4219636-df4a-4684-a4ec-4304d1f161cb",
+              "alias": "Rotatorio 100",
+              "tipo": "Post Rotatorio"
+            },
+            {
+              "id": "e484cc80-4c54-4a1f-b41a-eb75d377cd67",
+              "alias": "Sump",
+              "tipo": "Estanque Acumulaci\u00F3n / Reservorio"
+            },
+            {
+              "id": "08a154b0-6962-469a-bad0-4c36fae244aa",
+              "alias": "Ozono 100",
+              "tipo": "Ozono"
+            },
+            {
+              "id": "1f2f45b1-f77b-424f-88d3-a470c0bab3ba",
+              "alias": "Bio 100",
+              "tipo": "Biofiltro"
+            }
+          ]
+        }
+      ],
+      "afluenteMode": "single",
+      "afluente": "Dulce",
+      "updatedAtUtc": "2026-10-02T12:00:00\u002B00:00",
+      "isDeleted": false,
+      "serverVersion": 2400
+    },
+    {
+      "id": "cdccb617-e353-4755-95db-8feeaf31ffcb",
+      "name": "RIO NEGRO",
+      "code": null,
+      "latitude": null,
+      "longitude": null,
+      "ownerClientId": null,
+      "operatorName": null,
+      "isActive": true,
+      "salas": [
+        "Tratamiento primario",
+        "P - 5",
+        "P - 8",
+        "P - 10",
+        "Incubaci\u00F3n (8\u00B0C)",
+        "Incubaci\u00F3n (2\u00B0C)"
+      ],
+      "sistemas": [
+        {
+          "id": "2c244e2d-c5d7-4ae3-ae16-65f42172d114",
+          "nombre": "Tratamiento primario",
+          "tipo": "AFLUENTE",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "8906b0d9-85cd-45f0-a2c4-5af3135cb630",
+              "alias": "Boca toma - rio Chiculdeo",
+              "tipo": "Otro"
+            },
+            {
+              "id": "1a576704-153d-490d-ae38-24352cd98d99",
+              "alias": "Post Rotatorio",
+              "tipo": "Post Rotatorio"
+            },
+            {
+              "id": "7664122b-52c5-4711-83f1-692f9473b1c8",
+              "alias": "Post UV",
+              "tipo": "Post UV"
+            },
+            {
+              "id": "4c89960a-43df-4992-935c-aedb5eb5357c",
+              "alias": "Manifold",
+              "tipo": "Make Up / Ingreso Afluente"
+            }
+          ]
+        },
+        {
+          "id": "89e25a70-dc9a-4ba5-a18d-14c9619cbc2c",
+          "nombre": "P - 5",
+          "tipo": "FRY",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "63835573-4891-407c-a491-789fe21e8b56",
+              "alias": "P5-1",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "7781a7ca-6d5a-4c7c-a884-a9a410d585c6",
+              "alias": "P5-2",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "75e82f8a-4267-48bd-a024-b8f8bb7679a1",
+              "alias": "P5-3",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "70923532-0e75-496f-95f0-2b53519eaeee",
+              "alias": "P5-4",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "53b9a140-787d-4d0b-8f9f-49b1b08bfef7",
+              "alias": "P5-5",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "e5141097-7741-43fb-8a58-cff63c431bc1",
+              "alias": "P5-6",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "09d2654c-dc34-4040-892f-0ab82345bfd9",
+              "alias": "P5-7",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "97cd928c-2519-40ef-9166-871c785ceb7c",
+              "alias": "P5-8",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "6209196f-1a49-422a-8564-6fee62380ede",
+              "alias": "P5-9",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "3978831d-289e-4758-9840-bd3655899fc6",
+              "alias": "P5-10",
+              "tipo": "Interior Estanque"
+            }
+          ]
+        },
+        {
+          "id": "bafdb604-bc71-4fed-9087-cb876256ba82",
+          "nombre": "P - 8",
+          "tipo": "FRY",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "38f8f1ec-480f-4495-a5b2-19bbb52c06aa",
+              "alias": "P8-1",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "d557c7fb-cfa8-4082-9b29-6c394b1073ca",
+              "alias": "P8-2",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "26efb259-6b98-4cea-aa2e-95ffd55856bc",
+              "alias": "P8-3",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "029217bf-cd44-4596-94be-c2c5482916eb",
+              "alias": "P8-4",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "fa3297bc-9799-4b97-969a-8cf2863a78d8",
+              "alias": "P8-5",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "3dc49abe-a0be-4988-9b24-9f61057b584f",
+              "alias": "P8-6",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "f3e64ec1-df74-4ea9-a4ca-8c4b2cc83bcc",
+              "alias": "P8-7",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "512a2182-9077-4735-b61f-df3fd0ae7868",
+              "alias": "P8-8",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "be51d4ae-20de-4d2e-a1de-3c4777d9702e",
+              "alias": "P8-9",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "94c645a3-8af3-4c82-b3dc-ba1193c66de7",
+              "alias": "P8-10",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "4d172816-fdb7-4a16-a0d1-075330195804",
+              "alias": "P8-11",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "ca073106-11d0-42d7-a4ac-67c9a3d60389",
+              "alias": "P8-12",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "dfd11025-8f71-4748-9701-42524f0eeaf6",
+              "alias": "P8-13",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "fd74b21e-5b3c-4ac6-a9f1-a183a9b404bd",
+              "alias": "P8-14",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "c812bd19-5908-4577-8856-a4aacb7ae716",
+              "alias": "P8-15",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "f121fc9c-949d-49c5-8841-a5ee262e3fcd",
+              "alias": "P8-16",
+              "tipo": "Interior Estanque"
+            }
+          ]
+        },
+        {
+          "id": "04b75c8d-1fd5-49b3-9a71-980ce9d5a2b9",
+          "nombre": "P - 10",
+          "tipo": "FRY",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "d674f4d4-64fb-4e88-a262-123fc0bd45fc",
+              "alias": "Despiche Cono P10-4",
+              "tipo": "Cono"
+            },
+            {
+              "id": "8c7b8cf2-eae1-4444-af6a-f3f5f262f032",
+              "alias": "Despiche Cono P10-5",
+              "tipo": "Cono"
+            },
+            {
+              "id": "2f40bd5d-d539-4541-9577-ce9484d7f84d",
+              "alias": "Despiche Cono P10-1",
+              "tipo": "Cono"
+            },
+            {
+              "id": "f6cc497c-2578-42a6-aaac-22c1fe913bfe",
+              "alias": "Despiche Cono P10-2",
+              "tipo": "Cono"
+            },
+            {
+              "id": "e13f8ed0-79a0-41ba-a7b5-3fcd0d03ebd9",
+              "alias": "Despiche Cono P10-3",
+              "tipo": "Cono"
+            },
+            {
+              "id": "127e15cb-d927-473f-8cc5-8f8946838fdb",
+              "alias": "Despiche Cono P10-6",
+              "tipo": "Cono"
+            },
+            {
+              "id": "8851ad51-a5f5-4f87-b62c-bd32f20f9bc5",
+              "alias": "Despiche Cono P10-7",
+              "tipo": "Cono"
+            },
+            {
+              "id": "675e2675-2221-4a2a-a858-d42ab6b074df",
+              "alias": "Despiche Cono P10-8",
+              "tipo": "Cono"
+            },
+            {
+              "id": "4fca260a-17e5-4715-906d-c42c77a6e9da",
+              "alias": "P10-1",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "61ad5e70-96f7-401e-86f2-75e526bd6dc0",
+              "alias": "P10-2",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "bb80d70c-3fca-4bcd-b883-ce6ca1239295",
+              "alias": "P10-3",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "7c150fc3-d0dd-4f66-983d-98f4c0997307",
+              "alias": "P10-4",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "d571e451-c874-4cc6-8040-035500d3ef25",
+              "alias": "P10-5",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "25c6d9ed-18f5-4eb7-884e-d9a409e151ba",
+              "alias": "P10-6",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "6b17b857-bf4d-444c-b1e1-81b6aa217ad0",
+              "alias": "P10-7",
+              "tipo": "Interior Estanque"
+            },
+            {
+              "id": "418dc5db-558a-4d1a-bd09-d3915cd1c332",
+              "alias": "P10-8",
+              "tipo": "Interior Estanque"
+            }
+          ]
+        },
+        {
+          "id": "d059a9cf-4873-4cd9-9e06-fcb4cad44dc5",
+          "nombre": "Incubaci\u00F3n (8\u00B0C)",
+          "tipo": "HATCHERY",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "2ad5375e-e746-4ec2-ad3c-3896a614ca9e",
+              "alias": "Make up FW (Post UV Noria)",
+              "tipo": "Make Up / Ingreso Afluente"
+            },
+            {
+              "id": "af0f37e0-af78-49db-a93a-31c49f7e64cf",
+              "alias": "Efluente Racks Incubaci\u00F3n a Sump",
+              "tipo": "Efluente"
+            },
+            {
+              "id": "57197730-53f2-4ed2-b9af-e9b1da906aa0",
+              "alias": "Sump",
+              "tipo": "Estanque Acumulaci\u00F3n / Reservorio"
+            },
+            {
+              "id": "fd04d019-8f52-4be1-81d8-df6a90a795bb",
+              "alias": "Retorno Chiller a Sump",
+              "tipo": "Chiller / Enfriamiento"
+            },
+            {
+              "id": "642c1ae0-ea5e-4de9-9c22-78d2293e39e2",
+              "alias": "Post UV (Grupo A y B)",
+              "tipo": "Post UV"
+            },
+            {
+              "id": "2d8d8067-ad3c-43c0-81f9-e12e322f00c2",
+              "alias": "Afluente ingreso Rack 17 (Balde 1844)",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "f60e1ad4-b5b8-4a6f-9043-b8e11332369f",
+              "alias": "Efluente Rack 17",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "81389d78-6f30-4766-806c-df7e76c33513",
+              "alias": "Efluente Rack 1",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "e99df26c-e50b-4b1f-bff4-ba08b451195c",
+              "alias": "Pre UV Noria",
+              "tipo": "Pre UV"
+            },
+            {
+              "id": "9d7a1671-288a-4b7d-972b-0fa6c8acfa70",
+              "alias": "C\u00E1mara Externa Salida Sala (Sin Sondeo)",
+              "tipo": "Efluente"
+            },
+            {
+              "id": "fffdd535-7de1-494f-bf4d-7ed2bb89205a",
+              "alias": "Efluente Rack 2",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "1dbf73b6-5fae-47df-9b29-c246ba523e16",
+              "alias": "Efluente Rack 3",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "0e7dcfde-3b95-4592-8ce9-a0dc53cc637d",
+              "alias": "Efluente Rack 4",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "b2cfb23d-be8c-421a-80f9-3aadd7ab41d1",
+              "alias": "Efluente Rack 5",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "3d8fa716-5394-4177-8f26-5621d8e7a11e",
+              "alias": "Efluente Rack 6",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "d0a64f90-2de7-40ee-a44d-d9291be062c7",
+              "alias": "Efluente Rack 7",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "9c4dbcab-5dfc-408d-86c3-adfc79faeefc",
+              "alias": "Efluente Rack 8",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "e6e09283-b8a3-499e-bd94-234360c980a7",
+              "alias": "Efluente Rack 9",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "551d5cda-c5fb-442f-8e1d-96fe1d294850",
+              "alias": "Efluente Rack 10",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "15f92f1f-a026-412e-a853-010a574753b7",
+              "alias": "Efluente Rack 11",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "1dc7f7ab-10ab-485b-8e6f-fcc757ccde9e",
+              "alias": "Efluente Rack 12",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "d1747c86-482b-4123-806f-b112de749ccc",
+              "alias": "Efluente Rack 13",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "8ea21de4-e5c8-47fc-83cd-7c64cc8ea030",
+              "alias": "Efluente Rack 14",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "0f8e3212-5d11-4430-bc35-483d4f98e535",
+              "alias": "Efluente Rack 15",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "c6f34a67-fda4-417d-a60f-31ca41fb544b",
+              "alias": "Efluente Rack 16",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "a048944f-33f1-4a66-ab3a-06bb004f64cc",
+              "alias": "Afluente ingreso Rack 17",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "eb47049b-3dc3-4a05-8f82-56508d2529cc",
+              "alias": "Afluente ingreso Rack 16",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "c3585ef1-c214-4357-9be3-bfaaa88e7988",
+              "alias": "Afluente ingreso Rack 15",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "27bea0d2-35d8-4f25-ac1a-ac5b49b98d72",
+              "alias": "Afluente ingreso Rack 14",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "af61f275-11fc-4211-9025-6fb78770d046",
+              "alias": "Afluente ingreso Rack 13",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "5d4228b9-f2d5-495a-ab1a-a2a211f2b24b",
+              "alias": "Afluente ingreso Rack 12",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "0018ed53-5c2d-4caa-ab5b-2789388cf448",
+              "alias": "Afluente ingreso Rack 11",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "324cba8f-405f-4a3c-83c8-bff8952a4649",
+              "alias": "Afluente ingreso Rack 10",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "2a2eb0fc-4c68-4884-a78b-bb5239d2b4e6",
+              "alias": "Afluente ingreso Rack 9",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "baf7ec0d-bb10-4670-b0fb-79d564e8fc69",
+              "alias": "Afluente ingreso Rack 8, Incuabador 2750",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "948dbd03-2602-450e-99e0-265979a5bfc2",
+              "alias": "Afluente ingreso Rack 7, Incubador 2672",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "729af80b-9997-4c70-800f-92e2fd73f4ee",
+              "alias": "Afluente ingreso Rack 6",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "b21ca4e3-8f4b-4607-ae0d-f2bca21c668b",
+              "alias": "Afluente ingreso Rack 5",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "34cd53ae-babf-4845-bdc2-638bc90d767f",
+              "alias": "Afluente ingreso Rack 4",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "76c7ebe6-5cab-424a-a888-6007a982cfd9",
+              "alias": "Afluente ingreso Rack 3",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "8bdb1fc7-4030-42d4-ba80-a91123bf09e8",
+              "alias": "Afluente ingreso Rack 2",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "c4d94c6a-78a5-49b2-8fb5-603483ed26a1",
+              "alias": "Afluente ingreso Rack 1",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "dd0dd9cc-a256-468d-bf6e-0f15f3104d96",
+              "alias": "Ingreso a Batea (Post sump, post UV)",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "f035e7f0-06c2-4037-b1e9-2ccf3b9e20b3",
+              "alias": "Retorno bateas",
+              "tipo": "Efluente"
+            }
+          ]
+        },
+        {
+          "id": "3365b1e7-ccd5-42bd-b414-ddc59541da68",
+          "nombre": "Incubaci\u00F3n (2\u00B0C)",
+          "tipo": "HATCHERY",
+          "afluente": null,
+          "puntosControl": [
+            {
+              "id": "c23cb097-0d2a-4e95-b35d-b1c9d4ff0390",
+              "alias": "Make up FW (Post UV Noria) Ingreso superior a Sistema Chiller Bucco",
+              "tipo": "Make Up / Ingreso Afluente"
+            },
+            {
+              "id": "c165b3c5-8618-4c1c-93d7-714062989d19",
+              "alias": "Incubador OV17 1066",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "8ec09caf-d9a8-470d-b84d-d1574673722a",
+              "alias": "Incubador OV20",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "ecb195de-ee2c-482b-bf53-21a9f957034b",
+              "alias": "Retorno Bateas (Limpieza)",
+              "tipo": "Efluente"
+            },
+            {
+              "id": "069d2507-6b4c-4da0-a47f-456ec32e6e87",
+              "alias": "C\u00E1mara Externa Salida Sala (Sondeado)",
+              "tipo": "Efluente"
+            },
+            {
+              "id": "0da58c51-0aad-4e84-831b-d1a65d253092",
+              "alias": "FW, Post UV Noria, Ingreso a BUCO",
+              "tipo": "Make Up / Ingreso Afluente"
+            },
+            {
+              "id": "185cd0ee-e16c-4b16-9298-16023e2913e9",
+              "alias": "Ingreso a Batea (Post sump, post UV)",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "771b91bd-8024-4b34-b808-4fedde6f2fb8",
+              "alias": "Retorno bateas",
+              "tipo": "Efluente"
+            },
+            {
+              "id": "a2a3556e-81b3-4e16-9d1e-a96982c22a01",
+              "alias": "Rack 3, Incubador 1506",
+              "tipo": "Batea / Incubaci\u00F3n"
+            },
+            {
+              "id": "a9d204fb-1953-4757-87e9-4600e42737c4",
+              "alias": "Rack 10, Incubador 2178",
+              "tipo": "Batea / Incubaci\u00F3n"
+            }
+          ]
+        }
+      ],
+      "afluenteMode": "single",
+      "afluente": "Dulce",
+      "updatedAtUtc": "2026-10-02T12:00:00\u002B00:00",
+      "isDeleted": false,
+      "serverVersion": 2400
+    }
+  ],
+  "cursor": 2400,
+  "hasMore": false
+}

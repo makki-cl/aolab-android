@@ -11,6 +11,7 @@ import '../config.dart';
 import '../data/app_database.dart';
 import '../models/audit.dart';
 import '../models/master.dart';
+import '../models/modelo_puntos.dart';
 import '../models/questionnaire.dart';
 import '../services/auth_service.dart';
 import '../services/media_service.dart';
@@ -156,6 +157,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   List<Sistema> get _masterSistemas =>
       (_center?.sistemas ?? []).where((s) => s.nombre.trim().isNotEmpty).toList();
 
+  // ¿El centro asignado tiene activo el modelo con equipos? Ahí sus puntos llegan agrupados y con
+  // nombre automático, y la auditoría guarda la foto del equipo de cada punto y la etapa del sistema.
+  // Un centro guardado por la versión anterior de la app se lee como plano hasta la próxima sincronización.
+  bool get _conEquipos => _center?.conEquipos ?? false;
+
   void _pickType(int? t) {
     _audit!.type = t ?? 0;
     setState(() {});
@@ -204,33 +210,31 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       _center?.afluenteMode == 'multi' ? m.afluente : _center?.afluente;
 
   // Agrega un sistema del maestro (sin puntos: se seleccionan individualmente).
+  // En un centro activado el tipo que manda el servidor es el código de la etapa, y la etapa queda
+  // además como foto para el informe. En el modelo plano todo como antes (sin etapa), igual que la web.
   AuditSala _addSalaFromMaster(Sistema m) {
     final sala = _newSala(m.nombre, tipo: m.tipo, fromMaster: true);
     sala.masterId = m.id;              // vínculo estable con el maestro
     sala.afluente = _afluenteSnapshot(m);
+    if (_conEquipos) sala.etapa = m.etapa;
     return sala;
   }
 
-  // Un punto del maestro se identifica por ALIAS + TIPO: un sistema puede tener dos puntos con el
-  // mismo alias distinguidos por el tipo (ej. "Rotatorio 100" Pre y Post).
-  bool _esMismoPunto(PuntoControl p, PuntoControlDef pd) {
-    if (pd.id.isNotEmpty && p.masterId == pd.id) return true;
-    if (p.masterId != null && p.masterId!.isNotEmpty) return false;
-    return p.nombre.trim().toLowerCase() == pd.alias.trim().toLowerCase() &&
-        (p.tipo ?? '').trim().toLowerCase() == (pd.tipo ?? '').trim().toLowerCase();
-  }
-
+  // Vínculo con el punto del maestro: por Id; para puntos guardados antes del Id, por alias + tipo,
+  // y eso solo contra el modelo plano (esMismoPunto, la misma regla de la web y el editor offline).
   // ¿El punto del maestro está seleccionado (presente y no borrado) en el sistema?
   bool _puntoIncluido(AuditSala sala, PuntoControlDef pd) => sala.puntosControl.any((p) =>
-      !p.isDeleted && p.fromMaster && _esMismoPunto(p, pd));
+      !p.isDeleted && p.fromMaster && esMismoPunto(p, pd));
 
   // Marca/desmarca un punto del maestro a auditar. Desmarcar = soft-delete.
+  // El punto nuevo lleva la foto del maestro: nombre y tipo y, en un centro activado, su equipo,
+  // su grupo y su ubicación (puntoDesdeMaestro). El RPN se sigue capturando por punto, como siempre.
   void _togglePunto(AuditSala sala, PuntoControlDef pd, bool include) {
-    final existing = sala.puntosControl.where((p) => p.fromMaster && _esMismoPunto(p, pd));
+    final existing = sala.puntosControl.where((p) => p.fromMaster && esMismoPunto(p, pd));
     setState(() {
       if (include) {
         if (existing.isEmpty) {
-          sala.puntosControl.add(PuntoControl(id: const Uuid().v4(), masterId: pd.id, nombre: pd.alias, tipo: pd.tipo, fromMaster: true));
+          sala.puntosControl.add(puntoDesdeMaestro(pd, id: const Uuid().v4(), conEquipos: _conEquipos));
         } else {
           existing.first.isDeleted = false;
         }
@@ -274,6 +278,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           existing.name = m.nombre;
           existing.tipo = m.tipo;
           existing.afluente = _afluenteSnapshot(m);
+          if (_conEquipos) existing.etapa = m.etapa;
         }
       } else if (existing != null) {
         existing.isDeleted = true;
@@ -663,7 +668,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
     final master = _masterSistemas;
     final adhoc = activos.where((s) => !s.fromMaster).toList();
-    final eliminados = a.document.salas.where((s) => s.isDeleted && !s.fromMaster).toList();
+    final eliminados = _salasEliminadas(a);
+    // Marcados que el maestro ya no trae (en un centro activado no llega lo retirado). Solo con el
+    // centro en caché: sin maestro no se sabe qué quedó fuera.
+    final fuera = _center == null ? <AuditSala>[] : sistemasFueraDelMaestro(a.document.salas, master);
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -684,6 +692,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           ),
         // Sistemas del maestro del centro: marcar cuáles se auditan (nombre/tipo se editan en el centro).
         if (master.isNotEmpty) _masterSistemasCard(master),
+        if (fuera.isNotEmpty) _fueraDelMaestroCard(fuera),
         // Sistemas ad-hoc.
         _adhocSistemasCard(adhoc),
         if (activos.isEmpty)
@@ -701,6 +710,59 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     );
   }
 
+  // La papelera de sistemas: los ad hoc y los del maestro que el maestro ya no trae (para estos
+  // no hay casilla donde volver a marcarlos).
+  List<AuditSala> _salasEliminadas(Audit a) => [
+        ...a.document.salas.where((s) => s.isDeleted && !s.fromMaster),
+        if (_center != null) ...sistemasFueraDelMaestro(a.document.salas, _masterSistemas, eliminados: true),
+      ];
+
+  // Bloque «Fuera del maestro»: sistemas marcados que el centro ya no ofrece (se retiraron o son del
+  // modelo anterior). Se ven con sus puntos y se pueden quitar; no se pueden volver a marcar.
+  Widget _fueraDelMaestroCard(List<AuditSala> fuera) => Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        color: const Color(0xFFFFF7E6),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Text('Fuera del maestro', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                const SizedBox(width: 8),
+                _badge('retirados', const Color(0xFF566873)),
+              ]),
+              const Padding(
+                padding: EdgeInsets.only(top: 2, bottom: 6),
+                child: Text('Estaban marcados, pero el centro ya no los ofrece: se retiraron o son del modelo anterior. '
+                    'Puedes quitarlos de esta auditoría.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
+              ),
+              for (final s in fuera)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(children: [
+                    const Icon(Icons.warehouse_outlined, size: 20, color: Color(0xFFB7791F)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(s.name.isEmpty ? 'Sistema' : s.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                    _tipoChip(tipoUnidad(s)),
+                    const SizedBox(width: 6),
+                    _badge('${s.puntosControl.where((p) => !p.isDeleted).length} pts', const Color(0xFF566873)),
+                    if (!_locked)
+                      IconButton(
+                        tooltip: 'Quitar de la auditoría',
+                        icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+                        onPressed: () => _removeSala(s),
+                      ),
+                  ]),
+                ),
+            ],
+          ),
+        ),
+      );
+
   // Fila de solo lectura de un sistema auditado (past-proof / bloqueada).
   Widget _sistemaReadonlyRow(AuditSala s) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
@@ -712,7 +774,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                 style: const TextStyle(fontWeight: FontWeight.w600)),
           ),
           const SizedBox(width: 8),
-          _tipoChip(s.tipo),
+          _tipoChip(tipoUnidad(s)),
           if (s.afluente != null && s.afluente!.isNotEmpty) ...[
             const SizedBox(width: 6),
             _afluenteChip(s.afluente),
@@ -761,6 +823,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final included = current != null && !current.isDeleted;
     final af = _afluenteSnapshot(m);
     final sel = current == null ? 0 : current.puntosControl.where((p) => !p.isDeleted).length;
+    // Puntos marcados que el maestro ya no trae: se listan aparte para poder quitarlos.
+    final fueraPts = current == null || current.isDeleted ? <PuntoControl>[] : puntosFueraDelMaestro(current, m.puntosControl);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Checkbox(
@@ -777,16 +841,21 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                   color: included ? null : const Color(0xFF8A93A2))),
         ),
         const SizedBox(width: 6),
-        _tipoChip(m.tipo),
+        // En un centro activado el sistema se rotula con su etapa («Smolt»); en V1, con su tipo.
+        _tipoChip(rotuloSistema(m, conEquipos: _conEquipos)),
         if (af != null && af.isNotEmpty) ...[const SizedBox(width: 6), _afluenteChip(af)],
         const SizedBox(width: 6),
-        _badge('$sel/${m.puntosControl.length}', included && sel > 0 ? const Color(0xFF2D58FF) : const Color(0xFF566873)),
+        _badge('$sel/${m.puntosControl.length + fueraPts.length}', included && sel > 0 ? const Color(0xFF2D58FF) : const Color(0xFF566873)),
       ]),
       if (included)
         Padding(
           padding: const EdgeInsets.only(left: 28, bottom: 6),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            for (final pd in m.puntosControl) _masterPuntoRow(current, pd),
+            ..._puntosMaestro(current, m.puntosControl),
+            if (fueraPts.isNotEmpty) ...[
+              _grupoTitulo('Fuera del modelo actual'),
+              for (final p in fueraPts) _fueraPuntoRow(p),
+            ],
             for (final p in current.puntosControl.where((p) => !p.isDeleted && !p.fromMaster)) _adhocPuntoRow(current, p),
             if (!_locked)
               TextButton.icon(
@@ -800,8 +869,50 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     ]);
   }
 
+  // Los puntos del maestro de un sistema para marcar. En el modelo plano, la lista tal cual (como
+  // siempre). En un centro activado, agrupados como se recorre el agua: afluentes, cada equipo con
+  // sus entradas, interiores y salidas, los tramos PRE/POST y el efluente, con su nombre automático.
+  List<Widget> _puntosMaestro(AuditSala sala, List<PuntoControlDef> puntos) {
+    final secciones = agruparPuntos(puntos);
+    return [
+      for (final sec in secciones) ...[
+        if (sec.grupo != null) _grupoTitulo(sec.titulo),
+        for (final b in sec.bloques) ...[
+          if (b.titulo != null) _equipoTitulo(b),
+          for (final pd in b.puntos)
+            Padding(
+              padding: EdgeInsets.only(left: b.titulo != null ? 12 : 0),
+              child: _masterPuntoRow(sala, pd),
+            ),
+        ],
+      ],
+    ];
+  }
+
+  Widget _grupoTitulo(String titulo) => Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 2),
+        child: Text(titulo.toUpperCase(),
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: Color(0xFF556173))),
+      );
+
+  // Título de un equipo dentro de «Equipos»: su alias y, si no lo dice ya, su tipo estándar.
+  Widget _equipoTitulo(BloquePuntos b) {
+    final tipo = b.equipoTipo?.trim() ?? '';
+    final mostrarTipo = tipo.isNotEmpty && !(b.titulo ?? '').toLowerCase().contains(tipo.toLowerCase());
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 2),
+      child: Row(children: [
+        const Icon(Icons.settings_input_component_outlined, size: 15, color: Color(0xFF556173)),
+        const SizedBox(width: 6),
+        Flexible(child: Text(b.titulo ?? 'Equipo', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+        if (mostrarTipo) ...[const SizedBox(width: 6), _badge(tipo, const Color(0xFF566873))],
+      ]),
+    );
+  }
+
   Widget _masterPuntoRow(AuditSala sala, PuntoControlDef pd) {
     final chk = _puntoIncluido(sala, pd);
+    final equipo = equipoAMostrar(pd);
     return Row(children: [
       SizedBox(
         width: 34, height: 34,
@@ -812,9 +923,34 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         ),
       ),
       Expanded(child: Text(pd.alias, style: TextStyle(fontSize: 13, color: chk ? null : const Color(0xFF8A93A2)))),
+      // En un tramo, el equipo por el que se nombra si el nombre no lo dice («POST UV» · «UV 2»).
+      if (equipo != null) ...[_badge(equipo, const Color(0xFF566873)), const SizedBox(width: 4)],
       if (pd.tipo != null && pd.tipo!.isNotEmpty) _badge(pd.tipo!, const Color(0xFF2D58FF)),
     ]);
   }
+
+  // Un punto marcado que el maestro ya no trae (retirado o del modelo anterior): se ve marcado y se
+  // puede desmarcar (queda en la papelera, como al desmarcar cualquier punto del maestro).
+  Widget _fueraPuntoRow(PuntoControl p) => Row(children: [
+        SizedBox(
+          width: 34, height: 34,
+          child: Checkbox(
+            value: true,
+            visualDensity: VisualDensity.compact,
+            onChanged: _locked
+                ? null
+                : (v) {
+                    if (v == false) {
+                      setState(() => p.isDeleted = true);
+                      _scheduleSave();
+                    }
+                  },
+          ),
+        ),
+        Expanded(child: Text(p.nombre, style: const TextStyle(fontSize: 13))),
+        if (p.tipo != null && p.tipo!.isNotEmpty) ...[_badge(p.tipo!, const Color(0xFF2D58FF)), const SizedBox(width: 4)],
+        _badge('fuera del modelo', const Color(0xFF566873)),
+      ]);
 
   Widget _adhocPuntoRow(AuditSala sala, PuntoControl p) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
@@ -954,9 +1090,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     );
   }
 
-  // Título de un sistema (nombre + chip de tipo + candado si viene del maestro).
+  // Título de un sistema (nombre + chip de tipo + candado si viene del maestro). El chip es la etapa
+  // con su etiqueta si la auditoría la guardó (centro activado); si no, el tipo de siempre.
   Widget _sistemaTitle(AuditSala sistema) {
-    final hasTipo = sistema.tipo != null && sistema.tipo!.isNotEmpty;
+    final tipo = tipoUnidad(sistema);
+    final hasTipo = tipo != null && tipo.isNotEmpty;
     return Row(children: [
       Flexible(
         child: Text(sistema.name.isEmpty ? 'Sistema' : sistema.name,
@@ -964,7 +1102,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       ),
       if (hasTipo) ...[
         const SizedBox(width: 8),
-        _badge(sistema.tipo!, const Color(0xFF2D58FF)),
+        _badge(tipo, const Color(0xFF2D58FF)),
       ],
       if (sistema.afluente != null && sistema.afluente!.isNotEmpty) ...[
         const SizedBox(width: 6),
@@ -1025,9 +1163,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado del punto: chip de tipo (si tiene) + candado si viene del maestro.
-            if ((p.tipo != null && p.tipo!.isNotEmpty) || p.fromMaster) ...[
+            // Encabezado del punto: equipo (si la foto lo trae y el nombre no lo dice: «POST UV» ·
+            // «UV 2»), chip de tipo (si tiene) + candado si viene del maestro.
+            if ((p.tipo != null && p.tipo!.isNotEmpty) || p.fromMaster || equipoDelPunto(p) != null) ...[
               Row(children: [
+                if (equipoDelPunto(p) case final equipo?) ...[
+                  _badge(equipo, const Color(0xFF566873)),
+                  const SizedBox(width: 6),
+                ],
                 if (p.tipo != null && p.tipo!.isNotEmpty) _badge(p.tipo!, const Color(0xFF2D58FF)),
                 if (p.fromMaster) ...[
                   const SizedBox(width: 6),
@@ -1875,7 +2018,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   // ── Papelera de sistemas ad-hoc (los del maestro se recuperan re-marcando el checkbox) ──
   Widget _deletedSalas(Audit a) {
-    final deleted = a.document.salas.where((s) => s.isDeleted && !s.fromMaster).toList();
+    final deleted = _salasEliminadas(a);
     if (deleted.isEmpty || _locked) return const SizedBox.shrink();
     return Card(
       margin: const EdgeInsets.only(top: 6, bottom: 12),

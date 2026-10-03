@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'llaves_ajenas.dart';
+
 /// Estados de la auditoría (0/1/2/3 — coinciden con el backend; scheduled AL FINAL).
 enum AuditStatus { draft, submitted, reviewed, scheduled }
 
@@ -37,15 +39,22 @@ class Answer {
   String? respuesta;
   String? comentario;
   String? titulo; // solo para "consultas adicionales" agregadas en la web
+  /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben (llaves_ajenas.dart).
+  Map<String, dynamic> extra;
 
-  Answer({this.respuesta, this.comentario, this.titulo});
+  Answer({this.respuesta, this.comentario, this.titulo, Map<String, dynamic>? extra}) : extra = extra ?? {};
 
-  Map<String, dynamic> toJson() => {'respuesta': respuesta, 'comentario': comentario, 'titulo': titulo};
+  static final _llaves = LlavesPropias(['respuesta', 'comentario', 'titulo']);
+
+  /// [ajenas]: incluir lo que la app no conoce (copia local) o no (push). Ver llaves_ajenas.dart.
+  Map<String, dynamic> toJson({bool ajenas = true}) =>
+      conAjenas({'respuesta': respuesta, 'comentario': comentario, 'titulo': titulo}, extra, incluir: ajenas);
 
   factory Answer.fromJson(Map<String, dynamic> j) => Answer(
         respuesta: j['respuesta'] as String?,
         comentario: j['comentario'] as String?,
         titulo: j['titulo'] as String?,
+        extra: _llaves.ajenas(j),
       );
 }
 
@@ -58,17 +67,29 @@ class Evidencia {
   bool uploaded;
   String? transcripcion; // solo audio; se llena luego con la API de Claude
   bool isDeleted; // soft-delete: papelera del punto; se purga al finalizar
+  /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben.
+  Map<String, dynamic> extra;
 
-  Evidencia({required this.id, this.contentType, this.capturedAtUtc, this.uploaded = false, this.transcripcion, this.isDeleted = false});
+  Evidencia({
+    required this.id,
+    this.contentType,
+    this.capturedAtUtc,
+    this.uploaded = false,
+    this.transcripcion,
+    this.isDeleted = false,
+    Map<String, dynamic>? extra,
+  }) : extra = extra ?? {};
 
-  Map<String, dynamic> toJson() => {
+  static final _llaves = LlavesPropias(['id', 'contentType', 'capturedAtUtc', 'uploaded', 'transcripcion', 'isDeleted']);
+
+  Map<String, dynamic> toJson({bool ajenas = true}) => conAjenas({
         'id': id,
         'contentType': contentType,
         'capturedAtUtc': capturedAtUtc?.toUtc().toIso8601String(),
         'uploaded': uploaded,
         'transcripcion': transcripcion,
         'isDeleted': isDeleted,
-      };
+      }, extra, incluir: ajenas);
 
   factory Evidencia.fromJson(Map<String, dynamic> j) => Evidencia(
         id: (j['id'] ?? '') as String,
@@ -77,6 +98,7 @@ class Evidencia {
         uploaded: (j['uploaded'] ?? false) as bool,
         transcripcion: j['transcripcion'] as String?,
         isDeleted: (j['isDeleted'] ?? false) as bool,
+        extra: _llaves.ajenas(j),
       );
 }
 
@@ -103,6 +125,18 @@ class PuntoControl {
   // pero debe transportarlos intactos: si no, al re-pushear borraría el trabajo del laboratorio.
   Map<String, dynamic>? bacti;
   Map<String, dynamic>? bactiHongos;
+  // ── Foto del modelo con equipos (F3) ──
+  // Se llenan al agregar el punto desde un centro con el modelo con equipos activo y quedan como
+  // estaban aunque después cambie el modelo (renombrar o mover un equipo no reescribe la historia).
+  // Null en las auditorías anteriores, en los centros en el modelo plano y en los puntos ad hoc.
+  String? equipoId; // equipo del punto (en un tramo, el equipo con que se nombra)
+  String? equipoAlias; // cómo se llamaba ese equipo en el centro al auditar
+  String? equipoTipo; // tipo estándar del equipo (o tipo de afluente)
+  String? grupo; // afluente | equipo | tramo | efluente
+  String? ubicacion; // entrada | salida | interior | tramo
+  String? referencia; // solo tramos: pre | post
+  /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben.
+  Map<String, dynamic> extra;
 
   PuntoControl({
     required this.id,
@@ -114,6 +148,12 @@ class PuntoControl {
     this.isDeleted = false,
     this.bacti,
     this.bactiHongos,
+    this.equipoId,
+    this.equipoAlias,
+    this.equipoTipo,
+    this.grupo,
+    this.ubicacion,
+    this.referencia,
     this.estadoOperacional,
     this.limpiezaBiofilm,
     this.impactoPeces,
@@ -121,10 +161,23 @@ class PuntoControl {
     this.comentario,
     List<Evidencia>? fotos,
     List<Evidencia>? audios,
+    Map<String, dynamic>? extra,
   })  : fotos = fotos ?? [],
-        audios = audios ?? [];
+        audios = audios ?? [],
+        extra = extra ?? {};
 
-  Map<String, dynamic> toJson() => {
+  static final _llaves = LlavesPropias([
+    'id', 'nombre', 'correlativo', 'tipo', 'fromMaster', 'masterId', 'isDeleted', //
+    'estadoOperacional', 'limpiezaBiofilm', 'impactoPeces', 'detectabilidad', 'comentario', //
+    'fotos', 'audios', 'bacti', 'bactiHongos', //
+    'equipoId', 'equipoAlias', 'equipoTipo', 'grupo', 'ubicacion', 'referencia',
+  ]);
+
+  // La foto del modelo solo se escribe si tiene valor. Así la app nunca manda un null encima de una
+  // foto que el servidor sí tiene: una auditoría bajada por la versión anterior de la app (que no
+  // guardaba estos campos) sube sin ellos y el servidor conserva los suyos (fusión de F0). La app
+  // nunca borra una foto, así que no necesita mandar null.
+  Map<String, dynamic> toJson({bool ajenas = true}) => conAjenas({
         'id': id,
         'nombre': nombre,
         'correlativo': correlativo,
@@ -137,11 +190,17 @@ class PuntoControl {
         'impactoPeces': impactoPeces,
         'detectabilidad': detectabilidad,
         'comentario': comentario,
-        'fotos': fotos.map((e) => e.toJson()).toList(),
-        'audios': audios.map((e) => e.toJson()).toList(),
+        'fotos': fotos.map((e) => e.toJson(ajenas: ajenas)).toList(),
+        'audios': audios.map((e) => e.toJson(ajenas: ajenas)).toList(),
         'bacti': bacti,
         'bactiHongos': bactiHongos,
-      };
+        if (equipoId != null) 'equipoId': equipoId,
+        if (equipoAlias != null) 'equipoAlias': equipoAlias,
+        if (equipoTipo != null) 'equipoTipo': equipoTipo,
+        if (grupo != null) 'grupo': grupo,
+        if (ubicacion != null) 'ubicacion': ubicacion,
+        if (referencia != null) 'referencia': referencia,
+      }, extra, incluir: ajenas);
 
   factory PuntoControl.fromJson(Map<String, dynamic> j) => PuntoControl(
         id: (j['id'] ?? '') as String,
@@ -160,6 +219,13 @@ class PuntoControl {
         audios: ((j['audios'] ?? []) as List).map((e) => Evidencia.fromJson((e ?? {}) as Map<String, dynamic>)).toList(),
         bacti: j['bacti'] as Map<String, dynamic>?,
         bactiHongos: j['bactiHongos'] as Map<String, dynamic>?,
+        equipoId: textoOpcional(j['equipoId']),
+        equipoAlias: textoOpcional(j['equipoAlias']),
+        equipoTipo: textoOpcional(j['equipoTipo']),
+        grupo: textoOpcional(j['grupo']),
+        ubicacion: textoOpcional(j['ubicacion']),
+        referencia: textoOpcional(j['referencia']),
+        extra: _llaves.ajenas(j),
       );
 }
 
@@ -171,9 +237,15 @@ class AuditSala {
   bool fromMaster; // viene del maestro del centro: nombre y tipo inmutables en la auditoría
   String? masterId; // Id del sistema en el maestro (vínculo estable)
   String? afluente; // snapshot del afluente del sistema al auditar
+  // Etapa del sistema al auditarlo (foto de la etapa del maestro: HATCHERY, FF…). Solo la llenan las
+  // auditorías de un centro con el modelo con equipos; null = auditoría anterior o etapa por definir,
+  // y ahí se muestra el tipo. Como la foto del punto, solo se escribe si tiene valor.
+  String? etapa;
   bool isDeleted; // soft-delete recuperable
   Map<String, Answer> answers; // entrevista
   List<PuntoControl> puntosControl; // inspección RPN
+  /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben.
+  Map<String, dynamic> extra;
 
   AuditSala({
     required this.id,
@@ -182,23 +254,30 @@ class AuditSala {
     this.fromMaster = false,
     this.masterId,
     this.afluente,
+    this.etapa,
     this.isDeleted = false,
     Map<String, Answer>? answers,
     List<PuntoControl>? puntosControl,
+    Map<String, dynamic>? extra,
   })  : answers = answers ?? {},
-        puntosControl = puntosControl ?? [];
+        puntosControl = puntosControl ?? [],
+        extra = extra ?? {};
 
-  Map<String, dynamic> toJson() => {
+  static final _llaves = LlavesPropias(
+      ['id', 'name', 'tipo', 'fromMaster', 'masterId', 'afluente', 'etapa', 'isDeleted', 'answers', 'puntosControl']);
+
+  Map<String, dynamic> toJson({bool ajenas = true}) => conAjenas({
         'id': id,
         'name': name,
         'tipo': tipo,
         'fromMaster': fromMaster,
         'masterId': masterId,
         'afluente': afluente,
+        if (etapa != null) 'etapa': etapa,
         'isDeleted': isDeleted,
-        'answers': answers.map((k, v) => MapEntry(k, v.toJson())),
-        'puntosControl': puntosControl.map((p) => p.toJson()).toList(),
-      };
+        'answers': answers.map((k, v) => MapEntry(k, v.toJson(ajenas: ajenas))),
+        'puntosControl': puntosControl.map((p) => p.toJson(ajenas: ajenas)).toList(),
+      }, extra, incluir: ajenas);
 
   factory AuditSala.fromJson(Map<String, dynamic> j) => AuditSala(
         id: (j['id'] ?? '') as String,
@@ -207,28 +286,41 @@ class AuditSala {
         fromMaster: (j['fromMaster'] ?? false) as bool,
         masterId: j['masterId'] as String?,
         afluente: j['afluente'] as String?,
+        etapa: textoOpcional(j['etapa']),
         isDeleted: (j['isDeleted'] ?? false) as bool,
         answers: ((j['answers'] ?? {}) as Map<String, dynamic>)
             .map((k, v) => MapEntry(k, Answer.fromJson((v ?? {}) as Map<String, dynamic>))),
         puntosControl: ((j['puntosControl'] ?? []) as List)
             .map((p) => PuntoControl.fromJson((p ?? {}) as Map<String, dynamic>))
             .toList(),
+        extra: _llaves.ajenas(j),
       );
 }
 
 /// Contenido de la auditoría: respuestas de centro + salas repetibles.
+///
+/// El documento del servidor tiene mucho más que esto (el informe, los comentarios, la comparativa,
+/// los interruptores de RPN y entrevista…), que la app no edita. Va en `extra`, que se guarda en la
+/// copia local pero NO se sube: la copia de la app puede estar vieja y pisaría lo que se editó en la
+/// web; lo que el push no trae, el servidor lo conserva (fusión de F0).
 class AuditDocument {
   Map<String, Answer> center;
   List<AuditSala> salas;
+  /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben.
+  Map<String, dynamic> extra;
 
-  AuditDocument({Map<String, Answer>? center, List<AuditSala>? salas})
+  AuditDocument({Map<String, Answer>? center, List<AuditSala>? salas, Map<String, dynamic>? extra})
       : center = center ?? {},
-        salas = salas ?? [];
+        salas = salas ?? [],
+        extra = extra ?? {};
 
-  Map<String, dynamic> toJson() => {
-        'center': center.map((k, v) => MapEntry(k, v.toJson())),
-        'salas': salas.map((s) => s.toJson()).toList(),
-      };
+  static final _llaves = LlavesPropias(['center', 'salas']);
+
+  /// [ajenas]: true para la copia local (SQLite), false para el push.
+  Map<String, dynamic> toJson({bool ajenas = true}) => conAjenas({
+        'center': center.map((k, v) => MapEntry(k, v.toJson(ajenas: ajenas))),
+        'salas': salas.map((s) => s.toJson(ajenas: ajenas)).toList(),
+      }, extra, incluir: ajenas);
 
   factory AuditDocument.fromJson(Map<String, dynamic> j) => AuditDocument(
         center: ((j['center'] ?? {}) as Map<String, dynamic>)
@@ -236,6 +328,7 @@ class AuditDocument {
         salas: ((j['salas'] ?? []) as List)
             .map((s) => AuditSala.fromJson(s as Map<String, dynamic>))
             .toList(),
+        extra: _llaves.ajenas(j),
       );
 
   static AuditDocument decode(String? raw) =>
@@ -268,6 +361,12 @@ class Audit {
   bool isDeleted;
   int serverVersion;
   bool dirty; // pendiente de subir
+  /// Campos de la cabecera que esta versión no conoce (hoy `ownerUserId` y `assignedToUserId`;
+  /// mañana, por ejemplo, `muestreoId`): se guardan en SQLite (columna `extra`) para que la copia
+  /// local quede completa, pero NO se suben. La app no los edita: reenviar su copia, que puede estar
+  /// vieja, devolvería por ejemplo el auditor asignado a quien estaba cuando la tablet la bajó. El
+  /// servidor deja como está todo campo de cabecera que el push no trae.
+  Map<String, dynamic> extra;
 
   Audit({
     required this.id,
@@ -289,7 +388,24 @@ class Audit {
     this.isDeleted = false,
     this.serverVersion = 0,
     this.dirty = true,
-  }) : document = document ?? AuditDocument();
+    Map<String, dynamic>? extra,
+  })  : document = document ?? AuditDocument(),
+        extra = extra ?? {};
+
+  static final _llaves = LlavesPropias([
+    'id', 'status', 'folio', 'type', 'centerName', 'auditor', 'sampledAtUtc', 'centerId', 'clientId', //
+    'clientName', 'createdByName', 'scheduledForUtc', 'previousAuditId', 'document', 'createdAtUtc', //
+    'updatedAtUtc', 'isDeleted', 'serverVersion',
+  ]);
+
+  static Map<String, dynamic> _decodeExtra(Object? raw) {
+    if (raw is! String || raw.isEmpty) return {};
+    try {
+      return objetoOpcional(jsonDecode(raw)) ?? {};
+    } catch (_) {
+      return {};
+    }
+  }
 
   AuditStatus get statusEnum => auditStatusFromInt(status);
   AuditType get typeEnum => auditTypeFromInt(type);
@@ -316,6 +432,7 @@ class Audit {
         'is_deleted': isDeleted ? 1 : 0,
         'server_version': serverVersion,
         'dirty': dirty ? 1 : 0,
+        'extra': extra.isEmpty ? null : jsonEncode(extra),
       };
 
   factory Audit.fromRow(Map<String, Object?> r) => Audit(
@@ -338,9 +455,12 @@ class Audit {
         isDeleted: (r['is_deleted'] as int) == 1,
         serverVersion: r['server_version'] as int,
         dirty: (r['dirty'] as int) == 1,
+        extra: _decodeExtra(r['extra']),
       );
 
   // ---- API (DTO) ----
+  // Solo los campos que la app conoce y edita, en todos los niveles: lo ajeno se queda en SQLite
+  // (ver llaves_ajenas.dart).
   Map<String, dynamic> toDto() => {
         'id': id,
         'status': status,
@@ -355,7 +475,7 @@ class Audit {
         'createdByName': createdByName,
         'scheduledForUtc': scheduledForUtc?.toUtc().toIso8601String(),
         'previousAuditId': previousAuditId,
-        'document': document.toJson(),
+        'document': document.toJson(ajenas: false),
         'createdAtUtc': createdAtUtc.toUtc().toIso8601String(),
         'updatedAtUtc': updatedAtUtc.toUtc().toIso8601String(),
         'isDeleted': isDeleted,
@@ -382,5 +502,6 @@ class Audit {
         isDeleted: (d['isDeleted'] ?? false) as bool,
         serverVersion: (d['serverVersion'] ?? 0) as int,
         dirty: false,
+        extra: _llaves.ajenas(d),
       );
 }

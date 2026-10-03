@@ -51,6 +51,20 @@ flutter pub get
 flutter run --dart-define=AOLAB_API_BASE_URL=http://<IP_DE_LA_VM>:5080
 ```
 
+## Pruebas
+
+```bash
+flutter analyze
+flutter test        # no necesita dispositivo ni emulador
+```
+
+- `test/llaves_ajenas_test.dart`: la copia local (SQLite) de la auditoría conserva las llaves que
+  la app no conoce (cabecera, documento, sistema, respuesta, punto y evidencia), y el push NO las
+  manda: la copia de la app puede estar vieja y el servidor conserva lo que no viene.
+- `test/maestro_test.dart`: lee el maestro nuevo (centros con el modelo con equipos), el de un
+  servidor anterior y uno de un servidor más nuevo; agrupa los puntos sin perder ninguno. Usa JSON
+  real del servidor en `test/fixtures/`.
+
 ### ¿A qué URL apunta?
 Configurable por `--dart-define=AOLAB_API_BASE_URL=...` (ver `lib/config.dart`).
 - Emulador Android → backend en tu PC: `http://10.0.2.2:5080`
