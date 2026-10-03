@@ -232,9 +232,14 @@ class AppDatabase {
 
   Future<void> markSynced(String id, int serverVersion, {int? folio}) async {
     final db = await database;
-    final values = <String, Object?>{'dirty': 0, 'server_version': serverVersion};
-    // Folio: lo asigna el servidor al recibir la auditoría iniciada (inmutable, no se pisa si no viene).
-    if (folio != null) values['folio'] = folio;
+    // El folio lo escribe el auditor, pero el servidor lo arbitra: si otro equipo ya usaba ese
+    // número, lo devuelve nulo. Se copia TAL CUAL viene —también cuando es nulo— para que la
+    // pantalla no siga mostrando un folio que el servidor no aceptó.
+    final values = <String, Object?>{
+      'dirty': 0,
+      'server_version': serverVersion,
+      'folio': folio,
+    };
     await db.update('audits', values, where: 'id = ?', whereArgs: [id]);
   }
 

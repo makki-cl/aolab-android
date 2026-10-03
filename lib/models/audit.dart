@@ -85,7 +85,9 @@ class Evidencia {
 class PuntoControl {
   String id;
   String nombre;
-  int? correlativo; // 1..N por auditoría; se asigna al iniciar muestreo; es el Sample ID en Bactiquant
+  // Correlativo del punto, imputado por el auditor. Es la parte DESPUÉS del guion del
+  // "Sample ID" que se rotula en el frasco: {folio}-{correlativo}. Único dentro de la auditoría.
+  int? correlativo;
   String? tipo; // estándar (null = Sin Tipo)
   bool fromMaster; // viene del maestro: nombre y tipo inmutables en la auditoría
   String? masterId; // Id del punto en el maestro (vínculo estable)
@@ -246,7 +248,10 @@ class AuditDocument {
 class Audit {
   final String id; // GUID generado en el cliente (offline-safe)
   int status;
-  int? folio; // folio del informe (≥3000, inmutable); lo asigna el servidor al sincronizar
+  // Folio del informe, imputado por el auditor ANTES de muestrear (antes lo asignaba el servidor
+  // al sincronizar, y en terreno sin señal no había número que rotular en el frasco). El servidor
+  // solo arbitra que no se repita entre equipos.
+  int? folio;
   int type; // 0=spot, 1=seguimiento
   String centerName;
   String? auditor;

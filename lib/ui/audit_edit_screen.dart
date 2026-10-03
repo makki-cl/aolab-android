@@ -336,41 +336,59 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // ── Correlativos (llave con Bactiquant): 1..N por auditoría al iniciar el muestreo ──
-  bool get _hasCorrelativos =>
-      _audit?.document.salas.any((s) => s.puntosControl.any((p) => p.correlativo != null)) ?? false;
+  // ── Llave con Bactiquant: el "Sample ID" del frasco es {folio}-{correlativo} ──
+  // Ambos los imputa el auditor. Antes se numeraban solos 1..N y el folio lo daba el servidor al
+  // sincronizar; en terreno sin señal eso dejaba a la auditoría sin ningún número que rotular.
 
-  // Numera 1..N los puntos no borrados sin correlativo, en orden (sistema, punto), continuando
-  // desde el máximo ya asignado. Inmutable lo ya numerado (past-proof).
-  void _assignCorrelativos() {
-    final a = _audit;
-    if (a == null) return;
-    var maxC = 0;
-    for (final s in a.document.salas) {
-      for (final p in s.puntosControl) {
-        if (p.correlativo != null && p.correlativo! > maxC) maxC = p.correlativo!;
-      }
-    }
-    var next = maxC + 1;
-    for (final s in a.document.salas.where((s) => !s.isDeleted)) {
-      for (final p in s.puntosControl.where((p) => !p.isDeleted && p.correlativo == null)) {
-        p.correlativo = next++;
-      }
-    }
-  }
-
-  // Agendada → Borrador + numera los puntos (arranca el muestreo).
+  // Agendada → Borrador.
   Future<void> _startAudit() async {
-    _assignCorrelativos();
     await _setStatus(AuditStatus.draft.value, 'Auditoría iniciada');
   }
 
-  // Inicia el muestreo de un borrador (spot): numera los puntos. El folio lo asigna el servidor al sincronizar.
-  Future<void> _startSampling() async {
-    setState(_assignCorrelativos);
-    await _saveNow();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Muestreo iniciado — los puntos quedaron numerados')));
+  // El folio identifica la auditoría en el CSV. La unicidad entre equipos la arbitra el servidor
+  // al sincronizar (dos tablets sin señal pueden elegir el mismo): si la rechaza, el aviso llega
+  // en el push y el folio vuelve a quedar vacío.
+  void _onFolioChanged(String texto) {
+    final a = _audit;
+    if (a == null) return;
+    final v = texto.trim();
+    a.folio = v.isEmpty ? null : int.tryParse(v);
+    _scheduleSave();
+  }
+
+  // Correlativo del punto: único dentro de la auditoría, si no un mismo {folio}-{correlativo}
+  // calzaría con dos puntos y el CSV no sabría a cuál aplicar.
+  //
+  // Lo escrito se guarda SIEMPRE y el duplicado se avisa marcando el campo. Rechazar la tecla
+  // sería peor: al escribir "12" donde otro punto tiene el 1, la pulsación intermedia se vería
+  // como repetida, y además el número quedaría en pantalla sin haberse guardado.
+  void _onCorrelativoChanged(PuntoControl punto, String texto) {
+    final v = texto.trim();
+    punto.correlativo = v.isEmpty ? null : int.tryParse(v);
+    setState(() {});
+    _scheduleSave();
+  }
+
+  bool _correlativoDuplicado(PuntoControl punto) {
+    final n = punto.correlativo;
+    final a = _audit;
+    if (n == null || a == null) return false;
+    return a.document.salas
+        .expand((s) => s.puntosControl)
+        .any((o) => !identical(o, punto) && !o.isDeleted && o.correlativo == n);
+  }
+
+  /// Correlativos repetidos de toda la auditoría, para avisar antes de cerrarla.
+  List<int> get _correlativosRepetidos {
+    final a = _audit;
+    if (a == null) return const [];
+    final cuenta = <int, int>{};
+    for (final s in a.document.salas.where((s) => !s.isDeleted)) {
+      for (final p in s.puntosControl.where((p) => !p.isDeleted && p.correlativo != null)) {
+        cuenta[p.correlativo!] = (cuenta[p.correlativo!] ?? 0) + 1;
+      }
+    }
+    return (cuenta.entries.where((e) => e.value > 1).map((e) => e.key).toList()..sort());
   }
 
   // ── Consultas adicionales ──
@@ -539,11 +557,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                 onPressed: _startAudit,
                 icon: const Icon(Icons.play_arrow, size: 18),
                 label: const Text('Iniciar'))
-          else if (a.statusEnum == AuditStatus.draft && !_hasCorrelativos)
-            OutlinedButton.icon(
-                onPressed: _startSampling,
-                icon: const Icon(Icons.play_arrow, size: 18),
-                label: const Text('Iniciar muestreo'))
           else if (a.statusEnum == AuditStatus.draft)
             OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.green),
@@ -1026,14 +1039,33 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               const SizedBox(height: 6),
             ],
             Row(children: [
-              if (p.correlativo != null) ...[
-                Tooltip(
-                  message: 'Correlativo (Sample ID en Bactiquant)',
-                  child: Container(
+              if (_locked) ...[
+                if (p.correlativo != null) ...[
+                  Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
                     decoration: BoxDecoration(color: const Color(0xFF2D58FF), borderRadius: BorderRadius.circular(6)),
                     child: Text('${p.correlativo}',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ] else ...[
+                SizedBox(
+                  width: 64,
+                  child: TextFormField(
+                    key: ValueKey('pc-${p.id}'),
+                    initialValue: p.correlativo?.toString(),
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                    decoration: _dec().copyWith(
+                      hintText: 'N°',
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                      errorText: _correlativoDuplicado(p) ? '' : null,
+                      errorStyle: const TextStyle(height: 0, fontSize: 0),
+                    ),
+                    onChanged: (v) => _onCorrelativoChanged(p, v),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1596,12 +1628,31 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Future<void> _confirmFinalize() async {
+    // Los avisos van ANTES de cerrar: después queda inmutable y ya no se puede arreglar el
+    // rotulado. Sin folio o con correlativos repetidos, el CSV del Bactiquant no va a calzar.
+    final repetidos = _correlativosRepetidos;
+    final sinFolio = _audit?.folio == null;
+    final pendientes = [
+      if (sinFolio) 'La auditoría no tiene folio: el CSV de Bactiquant no podrá asociarse.',
+      if (repetidos.isNotEmpty)
+        'Hay correlativos repetidos (${repetidos.join(', ')}): el resultado no sabría a qué punto aplicarse.',
+    ];
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        icon: const Icon(Icons.check_circle, color: Colors.green),
+        icon: Icon(Icons.check_circle, color: pendientes.isEmpty ? Colors.green : Colors.orange),
         title: const Text('Finalizar auditoría'),
-        content: const Text('Una vez finalizada, la auditoría queda INMUTABLE: no podrás editar ningún dato. ¿Confirmas que está completa?'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final aviso in pendientes) ...[
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+              const SizedBox(width: 6),
+              Expanded(child: Text(aviso, style: const TextStyle(fontWeight: FontWeight.w600))),
+            ]),
+            const SizedBox(height: 10),
+          ],
+          const Text('Una vez finalizada, la auditoría queda INMUTABLE: no podrás editar ningún dato. ¿Confirmas que está completa?'),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(
@@ -1613,7 +1664,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       ),
     );
     if (ok == true) {
-      _assignCorrelativos(); // seguridad: numera lo que quedó sin correlativo antes de cerrar
       await _purgePapelera();
       await _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada');
     }
@@ -1666,10 +1716,26 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             title: Row(children: [
               _badge('IDENTIFICACIÓN', idc),
               const Spacer(),
-              if (a.folio != null)
-                _badge('Folio ${a.folio}', const Color(0xFF2D58FF))
-              else if (_hasCorrelativos)
-                _badge('Folio pendiente', const Color(0xFF566873)),
+              if (_locked) ...[
+                  if (a.folio != null) _badge('Folio ${a.folio}', const Color(0xFF2D58FF)),
+                ] else ...[
+                  SizedBox(
+                    width: 108,
+                    child: TextFormField(
+                      key: ValueKey('folio-${a.id}'),
+                      initialValue: a.folio?.toString(),
+                      keyboardType: TextInputType.number,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                      decoration: _dec().copyWith(
+                        labelText: 'Folio',
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      ),
+                      onChanged: _onFolioChanged,
+                    ),
+                  ),
+                ],
             ]),
             children: [
             // Tipo de auditoría

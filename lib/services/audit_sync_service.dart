@@ -23,6 +23,11 @@ class AuditSyncService extends ChangeNotifier {
   String? lastError;
   DateTime? lastSyncAt;
 
+  /// Avisos por ítem que devolvió el servidor en el push (hoy: folio repetido entre equipos).
+  /// El push se aplica igual —no se pierde el trabajo de terreno—, pero el auditor tiene que
+  /// enterarse de que su auditoría quedó sin folio para escribir otro.
+  final List<String> avisos = [];
+
   AuditSyncService({required this.db, required this.api, required this.masters, required this.media});
 
   Future<bool> _isOnline() async {
@@ -36,6 +41,7 @@ class AuditSyncService extends ChangeNotifier {
       _set(SyncStatus.offline);
       return;
     }
+    avisos.clear();
     _set(SyncStatus.syncing);
     // Cada paso se aísla: si uno falla (p.ej. subir una evidencia), los demás
     // siguen — así el PULL siempre trae las auditorías del servidor aunque el
@@ -98,6 +104,8 @@ class AuditSyncService extends ChangeNotifier {
     for (final r in results) {
       if ((r['status'] as int) == 0) {
         await db.markSynced(r['id'] as String, (r['serverVersion'] ?? 0) as int, folio: r['folio'] as int?);
+        final msg = r['message'] as String?;
+        if (msg != null && msg.isNotEmpty) avisos.add(msg);
       }
       // Conflict/Rejected se resuelven en el pull siguiente (gana el servidor).
     }
