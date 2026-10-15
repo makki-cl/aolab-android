@@ -1,0 +1,33 @@
+name: Verificar código (analyze + pruebas)
+
+# Solo revisa el código: NO compila el APK ni publica nada. Corre en las ramas de trabajo (las ramas que publican
+# —dev, prod— tienen su propio flujo). Sirve para verificar la app desde el CT, que no tiene Flutter instalado.
+on:
+  push:
+    branches-ignore: [dev, prod, staging, test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # La misma versión fija que build-apk.yml.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+
+      - name: Dependencias (las del pubspec.lock)
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analizar código
+        run: flutter analyze --no-fatal-infos
+
+      - name: Pruebas
+        run: flutter test
