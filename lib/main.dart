@@ -21,6 +21,9 @@ Future<void> main() async {
   final masters = MasterSyncService(db: db, api: auth.api);
   final media = MediaService(api: auth.api);
   final sync = AuditSyncService(db: db, api: auth.api, masters: masters, media: media);
+  try {
+    await sync.cargarAvisos(); // los avisos del servidor que quedaron sin cerrar
+  } catch (_) {}
 
   runApp(AolabApp(db: db, auth: auth, template: template, sync: sync, media: media));
 }
@@ -52,7 +55,7 @@ class AolabApp extends StatelessWidget {
         Provider<MediaService>.value(value: media),
       ],
       child: MaterialApp(
-        title: 'Aolab',
+        title: 'AOLAB',
         debugShowCheckedModeBanner: false,
         locale: const Locale('es'),
         localizationsDelegates: const [

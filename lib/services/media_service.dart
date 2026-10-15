@@ -71,28 +71,43 @@ class MediaService {
     }
   }
 
-  /// Sube las evidencias pendientes (uploaded=false) que tengan archivo local.
-  /// Devuelve true si alguna cambió su estado (para persistir el flag).
-  Future<bool> uploadPending(List<Evidencia> evidencias) async {
+  /// Sube las evidencias pendientes (uploaded=false) que tengan archivo local. Devuelve los ids de las que subieron
+  /// (para marcarlas sobre la fila recién leída: ver AppDatabase.marcarEvidenciasSubidas).
+  Future<Set<String>> uploadPending(List<Evidencia> evidencias) async {
     await dirPath();
-    var changed = false;
+    final subidas = <String>{};
     for (final ev in evidencias) {
       if (ev.uploaded) continue;
       final f = fileFor(ev.id);
       if (!f.existsSync()) continue;
       if (await _upload(ev.id, f, ev.contentType ?? 'application/octet-stream')) {
         ev.uploaded = true;
-        changed = true;
+        subidas.add(ev.id);
       }
     }
-    return changed;
+    return subidas;
   }
 
-  Future<void> remove(String id) async {
+  /// Borra el archivo local de una evidencia (la papelera que se vacía al finalizar). El del servidor se borra después,
+  /// cuando la evaluación ya subió sin ella (AuditSyncService).
+  Future<void> removeLocal(String id) async {
     await dirPath();
     final f = fileFor(id);
     if (f.existsSync()) await f.delete();
-    try { await api.dio.delete('/api/evidencias/$id'); } catch (_) {}
+  }
+
+  /// Borra la evidencia en el servidor. true si quedó borrada (o ya no estaba). El servidor no borra una evidencia
+  /// que siga viva en alguna evaluación (responde 204 igual).
+  Future<bool> removeRemote(String id) async {
+    try {
+      final res = await api.dio.delete('/api/evidencias/$id');
+      final code = res.statusCode ?? 0;
+      return code >= 200 && code < 300;
+    } on DioException catch (e) {
+      return e.response?.statusCode == 404;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ── Audio: grabación con nivel (VU) para validar micrófono ──

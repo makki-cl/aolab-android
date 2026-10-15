@@ -9,10 +9,13 @@ import 'package:uuid/uuid.dart';
 
 import '../config.dart';
 import '../data/app_database.dart';
+import '../data/reglas_sync.dart';
 import '../models/audit.dart';
 import '../models/master.dart';
 import '../models/modelo_puntos.dart';
+import '../models/numeros.dart';
 import '../models/questionnaire.dart';
+import '../services/audit_sync_service.dart';
 import '../services/auth_service.dart';
 import '../services/media_service.dart';
 import '../services/template_service.dart';
@@ -28,6 +31,11 @@ class AuditEditScreen extends StatefulWidget {
 class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProviderStateMixin {
   late final TabController _tab;
   late final MediaService _media;
+  late final AuditSyncService _sync;
+  int _ciclosVistos = 0;
+  // Sube cuando la evaluación se recarga desde la fila (el servidor la reemplazó mientras estaba abierta): los campos
+  // de texto se vuelven a crear con lo nuevo.
+  int _gen = 0;
   Audit? _audit;
   QuestionnaireTemplate? _tpl;
   List<ClientRef> _clients = [];
@@ -56,13 +64,53 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 4, vsync: this);
+    _tab = TabController(length: 5, vsync: this);
     _tab.addListener(_onTabChanged);
     _media = context.read<MediaService>();
+    _sync = context.read<AuditSyncService>();
+    _ciclosVistos = _sync.ciclos;
+    _sync.addListener(_onSync);
     _load();
   }
 
-  // Gating: Entrevista (2) y Auditoría RPN (3) requieren centro asignado.
+  // Terminó una sincronización mientras la evaluación está abierta: la fila pudo cambiar bajo el editor.
+  void _onSync() {
+    if (_sync.status == SyncStatus.syncing || _sync.ciclos == _ciclosVistos) return;
+    _ciclosVistos = _sync.ciclos;
+    _refrescarDesdeFila();
+  }
+
+  /// Si el servidor reemplazó la fila (bajó la evaluación mezclada con lo de la web), se recarga: guardar encima la
+  /// copia vieja del editor desharía lo de la web. Si no, solo se toma lo que el push le cambió (versión, folio
+  /// arbitrado, pendiente). Con un guardado en curso no se toca nada: ese guardado conserva la versión de su copia y
+  /// el servidor lo mezcla bien; la próxima sincronización la deja al día.
+  Future<void> _refrescarDesdeFila() async {
+    final a = _audit;
+    // Tampoco mientras graba un audio: el audio se agrega al punto que estaba en pantalla.
+    if (a == null || _saving || (_saveTimer?.isActive ?? false) || _recPunto != null) return;
+    final db = context.read<AppDatabase>();
+    final fila = await db.findById(a.id);
+    if (fila == null || !mounted || !identical(a, _audit) || _saving) return;
+    if (fila.localRev != a.localRev) {
+      setState(() {
+        _audit = fila;
+        _gen++;
+      });
+      return;
+    }
+    final folioCambio = fila.folio != a.folio && a.folio == a.folioLeido;
+    a.serverVersion = fila.serverVersion;
+    a.dirty = fila.dirty;
+    if (folioCambio) {
+      a.folio = fila.folio;
+      a.folioLeido = fila.folio;
+    }
+    setState(() {
+      if (folioCambio) _gen++;
+    });
+  }
+
+  // Gating: Entrevista (2), Evaluación RPN (3) y Muestreo (4) requieren centro asignado.
   void _onTabChanged() {
     if (_tab.indexIsChanging && _tab.index >= 2 && (_audit?.centerId == null)) {
       _tab.animateTo(1); // vuelve a Sistemas
@@ -75,6 +123,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   @override
   void dispose() {
+    _sync.removeListener(_onSync);
     _saveTimer?.cancel();
     _recTimer?.cancel();
     if (_recPunto != null) _media.cancelRecording();
@@ -347,7 +396,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   // Agendada → Borrador.
   Future<void> _startAudit() async {
-    await _setStatus(AuditStatus.draft.value, 'Auditoría iniciada');
+    await _setStatus(AuditStatus.draft.value, 'Evaluación iniciada');
   }
 
   // El folio identifica la auditoría en el CSV. La unicidad entre equipos la arbitra el servidor
@@ -482,11 +531,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget build(BuildContext context) {
     if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     if (_audit == null) {
-      return Scaffold(appBar: AppBar(), body: const Center(child: Text('No se encontró la auditoría.')));
+      return Scaffold(appBar: AppBar(), body: const Center(child: Text('No se encontró la evaluación.')));
     }
     if (_tpl == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Auditoría')),
+        appBar: AppBar(title: const Text('Evaluación')),
         body: const Padding(
           padding: EdgeInsets.all(24),
           child: Center(child: Text('Plantilla no disponible. Conéctate una vez para descargarla.')),
@@ -526,17 +575,22 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             const Tab(icon: Icon(Icons.warehouse_outlined), text: 'Sistemas'),
             // Entrevista y RPN quedan atenuadas hasta que haya centro.
             _gatedTab(Icons.question_answer_outlined, 'Entrevista', a.centerId != null),
-            _gatedTab(Icons.fact_check_outlined, 'Auditoría RPN', a.centerId != null),
+            _gatedTab(Icons.fact_check_outlined, 'Evaluación RPN', a.centerId != null),
+            _gatedTab(Icons.science_outlined, 'Muestreo', a.centerId != null),
           ],
         ),
       ),
       body: Column(
         children: [
           if (!_locked) _topActions(a),
+          if (!_locked && a.document.nadaActivo) _avisoNadaActivo(),
           Expanded(
-            child: TabBarView(
-              controller: _tab,
-              children: [_identificacionTab(a), _sistemasTab(a), _entrevistaTab(a), _rpnTab(a)],
+            child: KeyedSubtree(
+              key: ValueKey('gen-$_gen'),
+              child: TabBarView(
+                controller: _tab,
+                children: [_identificacionTab(a), _sistemasTab(a), _entrevistaTab(a), _rpnTab(a), _muestreoTab(a)],
+              ),
             ),
           ),
         ],
@@ -580,7 +634,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               color: Color(0xFFEFF3F6),
               child: ListTile(
                 leading: Icon(Icons.lock_outline),
-                title: Text('Auditoría finalizada'),
+                title: Text('Evaluación finalizada'),
                 subtitle: Text('Los datos quedan fijos (solo lectura).'),
               ),
             ),
@@ -592,7 +646,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   // ── Pestaña 3: ENTREVISTA (el cuestionario) ──
   Widget _entrevistaTab(Audit a) {
     if (a.centerId == null) return _needCenterNotice();
-    final activas = a.document.salas.where((s) => !s.isDeleted).toList();
+    final d = a.document;
+    final activas = d.salas.where((s) => !s.isDeleted).toList();
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -601,25 +656,85 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             color: Color(0xFFEFF3F6),
             child: ListTile(
               leading: Icon(Icons.lock_outline),
-              title: Text('Auditoría finalizada'),
+              title: Text('Evaluación finalizada'),
               subtitle: Text('Los datos quedan fijos (solo lectura).'),
             ),
           ),
-        for (final sec in _centerSections) _sectionCard(sec, a.document.center),
-        const SizedBox(height: 8),
-        if (activas.isEmpty)
-          const Card(
-            color: Color(0xFFEFF6FF),
-            child: ListTile(
-              leading: Icon(Icons.info_outline, color: Color(0xFF2D58FF)),
-              title: Text('Define los sistemas a auditar en la pestaña Sistemas.'),
-            ),
-          ),
-        for (final sala in activas) _salaCard(sala),
+        _seccionAplicada('la entrevista', d.aplicaEntrevista, (v) => _aplicarSeccion((x) => d.entrevistaDesactivada = x, v),
+            'Sin entrevista, el informe no incluye sus respuestas. El resto de la evaluación sigue igual.'),
+        if (!d.aplicaEntrevista)
+          _infoCard('La entrevista está marcada como no aplicada. Vuelve a activarla arriba si sí se hizo.')
+        else ...[
+          for (final sec in _centerSections) _sectionCard(sec, d.center),
+          const SizedBox(height: 8),
+          if (activas.isEmpty) _infoCard('Define los sistemas a evaluar en la pestaña Sistemas.'),
+          for (final sala in activas) _salaCard(sala),
+        ],
         const SizedBox(height: 40),
       ],
     );
   }
+
+  // ── Las partes de la visita (como la web): «Se aplica … en esta evaluación». La visita nace con nada activo y el
+  // evaluador marca lo que hace. Apagada, esa parte no se hizo y el informe sale sin ella. ──
+  Widget _seccionAplicada(String que, bool aplica, ValueChanged<bool> cambiar, String explicacion) {
+    const naranjo = Color(0xFFC2410C);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      color: aplica ? const Color(0xFFF6F8FB) : const Color(0xFFFBEDE7),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: aplica ? const Color(0xFFE1E6F0) : naranjo.withValues(alpha: 0.5)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 0, 12, 10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SwitchListTile(
+            value: aplica,
+            onChanged: _locked ? null : cambiar,
+            contentPadding: const EdgeInsets.only(left: 8),
+            title: Text('Se aplica $que en esta evaluación',
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: Text(explicacion, style: const TextStyle(fontSize: 12, color: Color(0xFF556173))),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  void _aplicarSeccion(void Function(bool desactivada) marcar, bool aplica) {
+    setState(() => marcar(!aplica));
+    _scheduleSave();
+  }
+
+  Widget _infoCard(String texto) => Card(
+        color: const Color(0xFFEFF6FF),
+        child: ListTile(
+          leading: const Icon(Icons.info_outline, color: Color(0xFF2D58FF)),
+          title: Text(texto, style: const TextStyle(fontSize: 14)),
+        ),
+      );
+
+  // Visita sin nada activo: lo mismo que avisa la web arriba del editor.
+  Widget _avisoNadaActivo() => Container(
+        width: double.infinity,
+        margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFBFD3FF)),
+        ),
+        child: const Text(
+          'Todavía no se aplica nada en esta evaluación: marca en su pestaña la entrevista, la evaluación de terreno '
+          '(RPN) o el laboratorio (Muestreo), según lo que se haga en la visita. Para finalizarla hace falta el RPN o el '
+          'laboratorio.',
+          style: TextStyle(fontSize: 12.5, color: Color(0xFF1E3A8A)),
+        ),
+      );
 
   // Aviso cuando aún no hay centro: Entrevista/RPN dependen de él.
   Widget _needCenterNotice() => ListView(
@@ -650,7 +765,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Sistemas auditados',
+                  const Text('Sistemas evaluados',
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   if (activos.isEmpty)
@@ -676,10 +791,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        const Text('Sistemas a auditar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        const Text('Sistemas a evaluar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         const Padding(
           padding: EdgeInsets.only(top: 2, bottom: 12),
-          child: Text('Los sistemas son transversales: alimentan tanto la Entrevista como la Auditoría RPN.',
+          child: Text('Los sistemas son transversales: alimentan la Entrevista, la Evaluación RPN y el Muestreo.',
               style: TextStyle(fontSize: 13, color: Color(0xFF556173))),
         ),
         if (a.centerId == null)
@@ -700,7 +815,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             color: Color(0xFFEFF6FF),
             child: ListTile(
               leading: Icon(Icons.info_outline, color: Color(0xFF2D58FF)),
-              title: Text('Aún no hay sistemas seleccionados para esta auditoría.'),
+              title: Text('Aún no hay sistemas seleccionados para esta evaluación.'),
             ),
           ),
         // Papelera de sistemas ad-hoc eliminados.
@@ -735,7 +850,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               const Padding(
                 padding: EdgeInsets.only(top: 2, bottom: 6),
                 child: Text('Estaban marcados, pero el centro ya no los ofrece: se retiraron o son del modelo anterior. '
-                    'Puedes quitarlos de esta auditoría.',
+                    'Puedes quitarlos de esta evaluación.',
                     style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
               ),
               for (final s in fuera)
@@ -752,7 +867,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                     _badge('${s.puntosControl.where((p) => !p.isDeleted).length} pts', const Color(0xFF566873)),
                     if (!_locked)
                       IconButton(
-                        tooltip: 'Quitar de la auditoría',
+                        tooltip: 'Quitar de la evaluación',
                         icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
                         onPressed: () => _removeSala(s),
                       ),
@@ -809,7 +924,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               ]),
               const Padding(
                 padding: EdgeInsets.only(top: 2, bottom: 6),
-                child: Text('Marca los que se auditan. El nombre y el tipo solo se editan en el centro.',
+                child: Text('Marca los que se evalúan. El nombre y el tipo solo se editan en el centro.',
                     style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
               ),
               for (final m in master) _masterSistemaRow(m),
@@ -1073,21 +1188,220 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   // ── Pestaña 4: AUDITORÍA RPN (puntos de control por sistema) ──
   Widget _rpnTab(Audit a) {
     if (a.centerId == null) return _needCenterNotice();
-    final sistemas = a.document.salas.where((s) => !s.isDeleted).toList();
+    final d = a.document;
+    final sistemas = d.salas.where((s) => !s.isDeleted).toList();
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        if (sistemas.isEmpty)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Define los sistemas en la pestaña Sistemas para inspeccionar sus puntos de control.'),
-            ),
-          ),
-        for (final sistema in sistemas) _sistemaRpnCard(sistema),
+        _seccionAplicada('la evaluación de terreno (RPN)', d.aplicaRpn, (v) => _aplicarSeccion((x) => d.rpnDesactivado = x, v),
+            'Es el caso típico cuando el cliente toma las muestras y las trae: sin visita no hay O, L, I ni D. El informe '
+            'sale sin matriz de riesgo ni índice, y con los resultados de BQ y FC igual que siempre.'),
+        if (!d.aplicaRpn)
+          _infoCard('La evaluación de terreno está marcada como no aplicada.'
+              '${d.aplicaLab ? ' Los frascos y el BQ/FC se anotan en la pestaña Muestreo.' : ''}')
+        else ...[
+          if (sistemas.isEmpty)
+            _infoCard('Define los sistemas en la pestaña Sistemas para inspeccionar sus puntos de control.'),
+          for (final sistema in sistemas) _sistemaRpnCard(sistema),
+        ],
         const SizedBox(height: 40),
       ],
     );
+  }
+
+  // ── Pestaña 5: MUESTREO (laboratorio BQ/FC): el frasco de cada punto ({folio}-{N°}) y, si se mide en terreno con la
+  // maleta, su resultado. ──
+  Widget _muestreoTab(Audit a) {
+    if (a.centerId == null) return _needCenterNotice();
+    final d = a.document;
+    final sistemas = d.salas.where((s) => !s.isDeleted).toList();
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        _seccionAplicada('el laboratorio (BQ/FC)', d.aplicaLab, (v) => _aplicarSeccion((x) => d.labDesactivado = x, v),
+            'Evaluación solo RPN: esta visita no lleva laboratorio, o no se tomaron muestras. El informe sale sin la tabla '
+            'BactiQuant ni los gráficos, con el índice RPN sin CM.'),
+        if (!d.aplicaLab)
+          _infoCard('El laboratorio está marcado como no aplicado: el informe mostrará solo el RPN. Vuelve a activarlo '
+              'arriba si sí se tomaron muestras.')
+        else ...[
+          _rotuloCard(a),
+          if (sistemas.isEmpty) _infoCard('Define los sistemas y marca sus puntos en la pestaña Sistemas.'),
+          for (final sistema in sistemas) _sistemaMuestreoCard(sistema),
+        ],
+        const SizedBox(height: 40),
+      ],
+    );
+  }
+
+  Widget _rotuloCard(Audit a) {
+    final folio = a.folio;
+    return Card(
+      color: folio == null ? const Color(0xFFFFF7E6) : const Color(0xFFEFF6FF),
+      child: ListTile(
+        leading: Icon(Icons.science_outlined, color: folio == null ? const Color(0xFFB7791F) : const Color(0xFF2D58FF)),
+        title: Text(folio == null
+            ? 'Escribe el folio en Identificación antes de rotular los frascos.'
+            : 'Folio $folio · cada frasco se rotula «$folio-N°»'),
+        subtitle: const Text('El N° es el correlativo del punto, único en la evaluación: con él se asocia el CSV del '
+            'Bactiquant. Si mides el BQ o el FC en terreno, anótalo aquí; si no, se carga en la web.'),
+      ),
+    );
+  }
+
+  Widget _sistemaMuestreoCard(AuditSala sistema) {
+    final puntos = sistema.puntosControl.where((p) => !p.isDeleted).toList();
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _sistemaTitle(sistema),
+          const SizedBox(height: 4),
+          if (puntos.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: Text('Sin puntos de control aún (se marcan en la pestaña Sistemas).',
+                  style: TextStyle(color: Colors.grey)),
+            ),
+          for (final p in puntos) _puntoMuestreoRow(p),
+        ]),
+      ),
+    );
+  }
+
+  Widget _puntoMuestreoRow(PuntoControl p) => Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE1E6F0)),
+          borderRadius: BorderRadius.circular(10),
+          color: const Color(0xFFFCFDFF),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            _correlativoCampo(p, 'mc'),
+            Expanded(
+              child: Text(_nombrePunto(p), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: _labCampo(p, hongos: false)),
+            const SizedBox(width: 8),
+            Expanded(child: _labCampo(p, hongos: true)),
+          ]),
+        ]),
+      );
+
+  // Nombre del punto con su posición, si la web anotó una (bateas / baldes: «Rack 3 · Batea 7»).
+  String _nombrePunto(PuntoControl p) {
+    final nombre = p.nombre.trim().isEmpty ? 'Punto sin nombre' : p.nombre.trim();
+    final pos = p.posicionEtiqueta;
+    return pos == null ? nombre : '$nombre · $pos';
+  }
+
+  // El N° del frasco (correlativo): campo editable o, cerrada, el número. Repetido en la evaluación = marcado.
+  Widget _correlativoCampo(PuntoControl p, String prefijo) {
+    if (_locked) {
+      if (p.correlativo == null) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+          decoration: BoxDecoration(color: const Color(0xFF2D58FF), borderRadius: BorderRadius.circular(6)),
+          child: Text('${p.correlativo}',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: SizedBox(
+        width: 64,
+        child: TextFormField(
+          key: ValueKey('$prefijo-${p.id}'),
+          initialValue: p.correlativo?.toString(),
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          decoration: _dec().copyWith(
+            hintText: 'N°',
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            errorText: _correlativoDuplicado(p) ? '' : null,
+            errorStyle: const TextStyle(height: 0, fontSize: 0),
+          ),
+          onChanged: (v) => _onCorrelativoChanged(p, v),
+        ),
+      ),
+    );
+  }
+
+  // BQ o FC del punto. Se escribe mientras el servidor no tenga ese resultado (vacío, o escrito en esta tablet y sin
+  // volver todavía): uno que el servidor ya tiene lo manda la web y se muestra sin editar.
+  Widget _labCampo(PuntoControl p, {required bool hongos}) {
+    final sigla = hongos ? 'FC' : 'BQ';
+    final slot = hongos ? 'fc' : 'bq';
+    final res = hongos ? p.bactiHongos : p.bacti;
+    final valor = hongos ? p.fc : p.bq;
+    final editable = !_locked && (res == null || p.labLocal.contains(slot));
+    if (!editable) {
+      return InputDecorator(
+        decoration: _dec().copyWith(
+          labelText: '$sigla value',
+          helperText: res == null ? null : _origenLab(res),
+        ),
+        child: Text(valor == null ? '—' : formatoNumero(valor), style: const TextStyle(fontWeight: FontWeight.w700)),
+      );
+    }
+    return TextFormField(
+      key: ValueKey('lab-$slot-${p.id}'),
+      initialValue: valor == null ? null : formatoNumero(valor),
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: _dec().copyWith(
+        labelText: '$sigla value',
+        hintText: 'ej. 1.234,5',
+        helperText: valor == null ? 'Opcional' : '= ${formatoNumero(valor)} · a mano',
+      ),
+      onChanged: (t) => _setLab(p, hongos, t),
+    );
+  }
+
+  String _origenLab(Map<String, dynamic> res) => switch (res['fuente']) {
+        'csv' => 'importado del CSV',
+        'app' => 'calculado con las lecturas',
+        'manual' => 'ingresado a mano',
+        _ => 'cargado en la web',
+      };
+
+  void _setLab(PuntoControl p, bool hongos, String texto) {
+    final slot = hongos ? 'fc' : 'bq';
+    final anterior = hongos ? p.bactiHongos : p.bacti;
+    final v = leerNumero(texto);
+    setState(() {
+      if (v == null) {
+        // Vaciar (o algo que no es número): solo se quita lo que se escribió aquí.
+        if (texto.trim().isEmpty && anterior != null && p.labLocal.contains(slot)) {
+          if (hongos) {
+            p.bactiHongos = null;
+          } else {
+            p.bacti = null;
+          }
+          p.labLocal.remove(slot);
+        }
+      } else {
+        final r = resultadoManual(v, hongos: hongos, anterior: anterior);
+        if (hongos) {
+          p.bactiHongos = r;
+        } else {
+          p.bacti = r;
+        }
+        p.labLocal.add(slot);
+      }
+    });
+    _scheduleSave();
   }
 
   // Título de un sistema (nombre + chip de tipo + candado si viene del maestro). El chip es la etapa
@@ -1165,8 +1479,13 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           children: [
             // Encabezado del punto: equipo (si la foto lo trae y el nombre no lo dice: «POST UV» ·
             // «UV 2»), chip de tipo (si tiene) + candado si viene del maestro.
-            if ((p.tipo != null && p.tipo!.isNotEmpty) || p.fromMaster || equipoDelPunto(p) != null) ...[
+            if ((p.tipo != null && p.tipo!.isNotEmpty) || p.fromMaster || equipoDelPunto(p) != null ||
+                p.posicionEtiqueta != null) ...[
               Row(children: [
+                if (p.posicionEtiqueta case final pos?) ...[
+                  _badge(pos, const Color(0xFF0E7490)),
+                  const SizedBox(width: 6),
+                ],
                 if (equipoDelPunto(p) case final equipo?) ...[
                   _badge(equipo, const Color(0xFF566873)),
                   const SizedBox(width: 6),
@@ -1182,37 +1501,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               const SizedBox(height: 6),
             ],
             Row(children: [
-              if (_locked) ...[
-                if (p.correlativo != null) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                    decoration: BoxDecoration(color: const Color(0xFF2D58FF), borderRadius: BorderRadius.circular(6)),
-                    child: Text('${p.correlativo}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-              ] else ...[
-                SizedBox(
-                  width: 64,
-                  child: TextFormField(
-                    key: ValueKey('pc-${p.id}'),
-                    initialValue: p.correlativo?.toString(),
-                    keyboardType: TextInputType.number,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-                    decoration: _dec().copyWith(
-                      hintText: 'N°',
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                      errorText: _correlativoDuplicado(p) ? '' : null,
-                      errorStyle: const TextStyle(height: 0, fontSize: 0),
-                    ),
-                    onChanged: (v) => _onCorrelativoChanged(p, v),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
+              // El N° del frasco, solo si la visita lleva laboratorio (se rotula {folio}-{N°}).
+              if (_audit?.document.aplicaLab ?? true) _correlativoCampo(p, 'pc'),
               Expanded(
                 child: TextFormField(
                   key: ValueKey('pn-${p.id}'),
@@ -1246,7 +1536,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             _evalBlock(p),
             const SizedBox(height: 6),
             TextFormField(
-              key: ValueKey('pc-${p.id}'),
+              key: ValueKey('pcom-${p.id}'),
               initialValue: p.comentario,
               readOnly: _locked,
               minLines: 1,
@@ -1429,7 +1719,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       context: context,
       builder: (_) => AlertDialog(
         title: Text('Eliminar $tipo'),
-        content: Text('¿Enviar $tipo a la papelera del punto? Podrás restaurarla hasta que finalices la auditoría.'),
+        content: Text('¿Enviar $tipo a la papelera del punto? Podrás restaurarla hasta que finalices la evaluación.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Eliminar')),
@@ -1596,7 +1886,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               padding: EdgeInsets.only(top: 4),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text('La papelera se vacía al finalizar la auditoría.',
+                child: Text('La papelera se vacía al finalizar la evaluación.',
                     style: TextStyle(fontSize: 11, color: Color(0xFF8A93A2), fontStyle: FontStyle.italic)),
               ),
             ),
@@ -1771,31 +2061,67 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Future<void> _confirmFinalize() async {
+    final a = _audit;
+    if (a == null) return;
+    final d = a.document;
+    // La regla de la web (y del servidor al finalizar allá): sin RPN ni laboratorio no hay nada que informar.
+    final nada = validarSecciones(d);
+    if (nada != null) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          icon: const Icon(Icons.rule_folder_outlined, color: Colors.orange),
+          title: const Text('Todavía no se puede finalizar'),
+          content: Text(nada),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Entendido'))],
+        ),
+      );
+      return;
+    }
     // Los avisos van ANTES de cerrar: después queda inmutable y ya no se puede arreglar el
     // rotulado. Sin folio o con correlativos repetidos, el CSV del Bactiquant no va a calzar.
-    final repetidos = _correlativosRepetidos;
-    final sinFolio = _audit?.folio == null;
+    final puntos = [
+      for (final s in d.salas.where((s) => !s.isDeleted)) ...s.puntosControl.where((p) => !p.isDeleted),
+    ];
+    final repetidos = d.aplicaLab ? _correlativosRepetidos : const <int>[];
+    final sinFolio = d.aplicaLab && a.folio == null;
+    final sinFrasco = d.aplicaLab ? puntos.where((p) => p.correlativo == null).length : 0;
+    final sinEvaluar = d.aplicaRpn
+        ? puntos
+            .where((p) =>
+                p.estadoOperacional == null || p.limpiezaBiofilm == null || p.impactoPeces == null || p.detectabilidad == null)
+            .length
+        : 0;
     final pendientes = [
-      if (sinFolio) 'La auditoría no tiene folio: el CSV de Bactiquant no podrá asociarse.',
+      if (puntos.isEmpty) 'La evaluación no tiene puntos de control marcados.',
+      if (sinFolio) 'La evaluación no tiene folio: el CSV de Bactiquant no podrá asociarse.',
       if (repetidos.isNotEmpty)
         'Hay correlativos repetidos (${repetidos.join(', ')}): el resultado no sabría a qué punto aplicarse.',
+      if (sinFrasco > 0) '$sinFrasco punto(s) sin N° de frasco: su resultado no se podrá asociar.',
+      if (sinEvaluar > 0) '$sinEvaluar punto(s) sin evaluar completo (O, L, I, D).',
+      if (!d.aplicaEntrevista) 'La entrevista queda como no aplicada.',
+      if (!d.aplicaRpn) 'La evaluación de terreno (RPN) queda como no aplicada.',
+      if (!d.aplicaLab) 'El laboratorio (BQ/FC) queda como no aplicado.',
     ];
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         icon: Icon(Icons.check_circle, color: pendientes.isEmpty ? Colors.green : Colors.orange),
-        title: const Text('Finalizar auditoría'),
-        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          for (final aviso in pendientes) ...[
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
-              const SizedBox(width: 6),
-              Expanded(child: Text(aviso, style: const TextStyle(fontWeight: FontWeight.w600))),
-            ]),
-            const SizedBox(height: 10),
-          ],
-          const Text('Una vez finalizada, la auditoría queda INMUTABLE: no podrás editar ningún dato. ¿Confirmas que está completa?'),
-        ]),
+        title: const Text('Finalizar evaluación'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (final aviso in pendientes) ...[
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+                const SizedBox(width: 6),
+                Expanded(child: Text(aviso, style: const TextStyle(fontWeight: FontWeight.w600))),
+              ]),
+              const SizedBox(height: 10),
+            ],
+            const Text(
+                'Una vez finalizada, la evaluación queda INMUTABLE: no podrás editar ningún dato. ¿Confirmas que está completa?'),
+          ]),
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           FilledButton(
@@ -1808,24 +2134,29 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     );
     if (ok == true) {
       await _purgePapelera();
-      await _setStatus(AuditStatus.submitted.value, 'Auditoría finalizada');
+      await _setStatus(AuditStatus.submitted.value, 'Evaluación finalizada');
     }
   }
 
-  // Vacía la papelera de evidencias (isDeleted): las quita del documento y borra el binario
-  // local y del servidor (_media.remove hace ambos). Se llama al finalizar.
+  // Vacía la papelera de evidencias (isDeleted): las quita del documento y borra el archivo local. El del servidor se
+  // borra después de que la evaluación suba sin ellas (AuditSyncService): si mientras tanto la oficina restauró alguna,
+  // la mezcla la conserva y el servidor no borra una evidencia que siga viva.
   Future<void> _purgePapelera() async {
     final a = _audit;
     if (a == null) return;
+    final db = context.read<AppDatabase>();
+    final ids = <String>[];
     for (final s in a.document.salas) {
       for (final pc in s.puntosControl) {
         for (final ev in [...pc.fotos.where((f) => f.isDeleted), ...pc.audios.where((x) => x.isDeleted)]) {
-          await _media.remove(ev.id);
+          await _media.removeLocal(ev.id);
+          ids.add(ev.id);
         }
         pc.fotos.removeWhere((f) => f.isDeleted);
         pc.audios.removeWhere((x) => x.isDeleted);
       }
     }
+    if (ids.isNotEmpty) await db.encolarBorrado(a.id, ids);
   }
 
   // ── Cabecera = IDENTIFICACIÓN ──
@@ -1882,7 +2213,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             ]),
             children: [
             // Tipo de auditoría
-            _labeled(null, 'Tipo de auditoría',
+            _labeled(null, 'Tipo de evaluación',
                 DropdownButtonFormField<int>(
                   value: a.type,
                   isExpanded: true,
@@ -1906,19 +2237,19 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                   ],
                 )),
             // Auditor (desde los usuarios del sistema)
-            _labeled('ID-04', 'Auditor',
+            _labeled('ID-04', 'Evaluador',
                 DropdownButtonFormField<String?>(
                   value: auditorVal,
                   isExpanded: true,
                   decoration: _dec(),
                   onChanged: _locked ? null : _pickAuditor,
                   items: [
-                    const DropdownMenuItem<String?>(value: null, child: Text('— Sin auditor —')),
+                    const DropdownMenuItem<String?>(value: null, child: Text('— Sin evaluador —')),
                     for (final u in _users) DropdownMenuItem<String?>(value: u.display, child: Text(u.display)),
                   ],
                 )),
             // Fecha
-            _labeled('ID-03', 'Fecha de auditoría',
+            _labeled('ID-03', 'Fecha de evaluación',
                 InkWell(
                   onTap: _locked ? null : _pickDate,
                   borderRadius: BorderRadius.circular(12),

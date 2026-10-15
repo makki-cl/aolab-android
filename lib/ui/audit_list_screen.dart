@@ -79,7 +79,9 @@ class _AuditListScreenState extends State<AuditListScreen> {
       createdAtUtc: now,
       updatedAtUtc: now,
       // createdByName lo resuelve el servidor (nombre completo del usuario) al pushear.
-      document: AuditDocument(), // los sistemas se eligen en la pestaña Sistemas
+      // Como en la web, la visita nace sin nada activo: el evaluador marca en cada pestaña la entrevista, la
+      // evaluación de terreno (RPN) o el laboratorio. Los sistemas se eligen en la pestaña Sistemas.
+      document: AuditDocument.nueva(),
     );
     await db.upsertLocal(audit);
     await _open(audit.id);
@@ -96,7 +98,7 @@ class _AuditListScreenState extends State<AuditListScreen> {
     final sync = context.watch<AuditSyncService>();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Auditorías'),
+        title: const Text('Evaluaciones'),
         actions: [
           IconButton(
             tooltip: 'Sincronizar',
@@ -136,17 +138,44 @@ class _AuditListScreenState extends State<AuditListScreen> {
                     ]),
                   ),
                 ),
+              if (sync.avisos.isNotEmpty) _avisos(sync),
               Expanded(child: _body()),
             ]),
     );
   }
+
+  // Los avisos del servidor quedan a la vista hasta que el evaluador los cierra (con mala señal, un aviso de 3 s se
+  // pierde). Cada uno ya nombra la evaluación (centro y folio).
+  Widget _avisos(AuditSyncService sync) => Material(
+        color: const Color(0xFFFFF4E5),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 4),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Icon(Icons.warning_amber_rounded, color: Color(0xFFB7791F), size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                    sync.avisos.length == 1 ? 'Aviso del servidor' : 'Avisos del servidor (${sync.avisos.length})',
+                    style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF8A5A00))),
+              ),
+              TextButton(onPressed: sync.cerrarAvisos, child: const Text('Entendido')),
+            ]),
+            for (final a in sync.avisos)
+              Padding(
+                padding: const EdgeInsets.only(left: 28, right: 8, bottom: 4),
+                child: Text('• $a', style: const TextStyle(fontSize: 13, color: Color(0xFF5C3D00))),
+              ),
+          ]),
+        ),
+      );
 
   Widget _body() => RefreshIndicator(
               onRefresh: _sync,
               child: _audits.isEmpty
                   ? ListView(children: const [
                       SizedBox(height: 140),
-                      Center(child: Text('Sin auditorías. Toca «Nueva» para crear una.')),
+                      Center(child: Text('Sin evaluaciones. Toca «Nueva» para crear una.')),
                     ])
                   : ListView.separated(
                       itemCount: _audits.length,
@@ -160,7 +189,8 @@ class _AuditListScreenState extends State<AuditListScreen> {
                         return ListTile(
                           leading: _StatusChip(a.statusEnum),
                           title: Text('${a.clientName ?? 'Sin cliente'} · ${a.centerName}'),
-                          subtitle: Text('$dateStr · ${a.auditor ?? 'sin auditor'} · ${a.typeEnum.label}'),
+                          subtitle: Text(
+                              '${a.folio != null ? 'Folio ${a.folio} · ' : ''}$dateStr · ${a.auditor ?? 'sin evaluador'} · ${a.typeEnum.label}'),
                           trailing: a.dirty
                               ? const Icon(Icons.cloud_upload_outlined, size: 18, color: Colors.orange)
                               : const Icon(Icons.cloud_done_outlined, size: 18, color: Colors.green),

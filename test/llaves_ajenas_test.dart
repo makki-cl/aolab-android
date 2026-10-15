@@ -154,7 +154,7 @@ const _propiasCabecera = {
   'clientName', 'createdByName', 'scheduledForUtc', 'previousAuditId', 'document', 'createdAtUtc', //
   'updatedAtUtc', 'isDeleted', 'serverVersion',
 };
-const _propiasDocumento = {'center', 'salas'};
+const _propiasDocumento = {'center', 'salas', 'entrevistaDesactivada', 'rpnDesactivado', 'labDesactivado'};
 const _propiasRespuesta = {'respuesta', 'comentario', 'titulo'};
 const _propiasSala = {'id', 'name', 'tipo', 'fromMaster', 'masterId', 'afluente', 'etapa', 'isDeleted', 'answers', 'puntosControl'};
 const _propiasPunto = {
@@ -181,6 +181,8 @@ Map<String, dynamic> soloPropias(Map<String, dynamic> pull) {
   return {
     ..._solo(pull, _propiasCabecera),
     'document': {
+      // Los interruptores de las partes de la visita: la app los marca y los sube (desde el 15-10-2026).
+      ..._solo(doc, {'entrevistaDesactivada', 'rpnDesactivado', 'labDesactivado'}),
       'center': respuestas(doc['center']),
       'salas': [
         for (final s in doc['salas'] as List)
@@ -238,7 +240,9 @@ void main() {
           expect(subido.containsKey(k), isFalse, reason: k);
         }
         final doc = subido['document'] as Map<String, dynamic>;
-        expect(doc.keys.toSet(), _propiasDocumento);
+        // Los interruptores que trajo el pull (este no trae el del laboratorio: una evaluación anterior a F5).
+        expect(doc.keys.toSet(), {'center', 'salas', 'entrevistaDesactivada', 'rpnDesactivado'});
+        expect(_propiasDocumento.containsAll(doc.keys), isTrue);
       }
     });
 
@@ -246,8 +250,10 @@ void main() {
       final a = Audit.fromDto(pullDelServidor());
       expect(a.extra.keys, containsAll(['ownerUserId', 'assignedToUserId', 'muestreoId']));
       expect(a.document.extra.keys, containsAll(
-          ['informe', 'comentarios', 'comparativa', 'rpnDesactivado', 'entrevistaDesactivada', 'tipoSistemaAgua',
-           'centerOperator', 'centerCode', 'seccionFutura']));
+          ['informe', 'comentarios', 'comparativa', 'tipoSistemaAgua', 'centerOperator', 'centerCode', 'seccionFutura']));
+      // Los interruptores ya no son ajenos: la app los muestra y los marca.
+      expect(a.document.extra.keys, isNot(contains('rpnDesactivado')));
+      expect((a.document.entrevistaDesactivada, a.document.rpnDesactivado, a.document.labDesactivado), (false, false, null));
       expect(a.document.center['ID-02']!.extra, {'adjuntoFuturo': 'x.pdf'});
       final sala = a.document.salas.single;
       expect(sala.extra, {'icaFutura': true});
@@ -306,9 +312,10 @@ void main() {
         updatedAtUtc: DateTime.utc(2026, 10, 2),
       );
       final dto = a.toDto();
+      // Sin creador: lo pone el servidor (mandarlo nulo dejaba la copia de la tablet distinta de la del servidor).
       expect(dto.keys.toSet(), {
         'id', 'status', 'folio', 'type', 'centerName', 'auditor', 'sampledAtUtc', 'centerId', 'clientId',
-        'clientName', 'createdByName', 'scheduledForUtc', 'previousAuditId', 'document', 'createdAtUtc',
+        'clientName', 'scheduledForUtc', 'previousAuditId', 'document', 'createdAtUtc',
         'updatedAtUtc', 'isDeleted', 'serverVersion',
       });
       expect((dto['document'] as Map).keys.toSet(), {'center', 'salas'});

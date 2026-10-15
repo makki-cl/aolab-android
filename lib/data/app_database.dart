@@ -5,12 +5,13 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/audit.dart';
 import '../models/master.dart';
+import 'reglas_sync.dart';
 
 /// Almacenamiento local offline (SQLite). Fuente de verdad en el dispositivo:
 /// guarda las auditorías, el cursor de sync y la plantilla cacheada.
 class AppDatabase {
   static const _dbName = 'aolab.db';
-  static const _dbVersion = 9;
+  static const _dbVersion = 10;
 
   Database? _db;
 
@@ -79,6 +80,12 @@ class AppDatabase {
           try { await db.execute('ALTER TABLE audits ADD COLUMN extra TEXT;'); } catch (_) {}
           try { await db.delete('kv', where: 'key = ?', whereArgs: ['center_cursor']); } catch (_) {}
         }
+        if (oldV < 10) {
+          // Contador de escrituras del contenido de cada evaluación (local_rev): con él, markSynced deja pendiente
+          // una fila que se editó mientras el envío iba y volvía, y el editor sabe si el servidor le reemplazó la fila
+          // mientras la tenía abierta. No se resetea ningún cursor.
+          try { await db.execute('ALTER TABLE audits ADD COLUMN local_rev INTEGER NOT NULL DEFAULT 0;'); } catch (_) {}
+        }
       },
     );
   }
@@ -105,7 +112,8 @@ class AppDatabase {
         updated_at      TEXT NOT NULL,
         is_deleted      INTEGER NOT NULL DEFAULT 0,
         server_version  INTEGER NOT NULL DEFAULT 0,
-        dirty           INTEGER NOT NULL DEFAULT 1
+        dirty           INTEGER NOT NULL DEFAULT 1,
+        local_rev       INTEGER NOT NULL DEFAULT 0
       );
     ''');
     await db.execute('CREATE INDEX idx_audits_dirty ON audits(dirty);');
@@ -217,19 +225,42 @@ class AppDatabase {
     return rows.isEmpty ? null : Audit.fromRow(rows.first);
   }
 
+  /// Guarda lo que editó el evaluador (queda pendiente de subir).
+  ///
+  /// [a] es una copia que se leyó de la fila (o se guardó) en algún momento, con su [Audit.localRev]. Al guardarla:
+  /// - Si la fila sigue siendo esa (misma revisión), solo pudo cambiarle markSynced la versión y el folio: se quedan
+  ///   los de la fila (la versión es la de la copia que el servidor guardó de lo que esta tablet le mandó).
+  /// - Si el servidor la reemplazó entretanto (applyFromServer, con el editor abierto), lo que [a] tiene viene de su
+  ///   propia versión: se guarda con esa, y el próximo envío se mezcla contra la copia correcta. Con la versión de la
+  ///   fila, el servidor creería que la tablet vio lo último y desharía lo que se cambió en la web.
+  /// - El folio: si el evaluador no lo cambió desde que leyó la copia, manda el de la fila (el servidor lo arbitra).
+  /// - Una evidencia que la fila ya tiene subida no vuelve a quedar sin subir.
+  /// Después de guardar, [a] queda con la versión, el folio y la revisión de la fila.
   Future<void> upsertLocal(Audit a, {bool markDirty = true}) async {
     final db = await database;
-    if (markDirty) a.dirty = true;
-    await db.insert('audits', a.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.transaction((txn) async {
+      if (markDirty) a.dirty = true;
+      final rows = await txn.query('audits', where: 'id = ?', whereArgs: [a.id]);
+      if (rows.isEmpty) {
+        a.localRev = 1;
+        await txn.insert('audits', a.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+      } else {
+        final fila = Audit.fromRow(rows.first);
+        if (fila.localRev == a.localRev) a.serverVersion = fila.serverVersion;
+        if (a.folio == a.folioLeido) a.folio = fila.folio;
+        conservarSubidas(a.document, fila.document);
+        a.localRev = fila.localRev + 1;
+        await txn.update('audits', a.toRow(), where: 'id = ?', whereArgs: [a.id]);
+      }
+      a.folioLeido = a.folio;
+    });
   }
 
   Future<void> softDelete(String id) async {
     final db = await database;
-    await db.update(
-      'audits',
-      {'is_deleted': 1, 'dirty': 1, 'updated_at': DateTime.now().toUtc().toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [id],
+    await db.rawUpdate(
+      'UPDATE audits SET is_deleted = 1, dirty = 1, updated_at = ?, local_rev = local_rev + 1 WHERE id = ?',
+      [DateTime.now().toUtc().toIso8601String(), id],
     );
   }
 
@@ -239,25 +270,109 @@ class AppDatabase {
     return rows.map(Audit.fromRow).toList();
   }
 
-  /// Aplica una auditoría recibida del servidor (ya sincronizada).
-  Future<void> applyFromServer(Audit a) async {
+  /// Aplica una evaluación recibida del servidor (ya sincronizada). No pisa una fila con cambios sin subir: esos se
+  /// mandan en el próximo envío, el servidor los mezcla, le da a la evaluación una versión nueva y el pull siguiente la
+  /// trae mezclada (lo mismo que hace el editor offline). Devuelve si la aplicó.
+  Future<bool> applyFromServer(Audit a) async {
     final db = await database;
-    a.dirty = false;
-    await db.insert('audits', a.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+    return db.transaction((txn) async {
+      final rows = await txn.query('audits', columns: ['dirty', 'local_rev'], where: 'id = ?', whereArgs: [a.id]);
+      if (rows.isNotEmpty && ((rows.first['dirty'] as int?) ?? 0) == 1) return false;
+      a.dirty = false;
+      a.localRev = rows.isEmpty ? 1 : ((rows.first['local_rev'] as int?) ?? 0) + 1;
+      await txn.insert('audits', a.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+      return true;
+    });
   }
 
-  Future<void> markSynced(String id, int serverVersion, {int? folio}) async {
+  /// Lo que vuelve del push para una evaluación aplicada. La versión se copia siempre (es la de la copia que el
+  /// servidor guardó de lo que se mandó: con ella el próximo envío se mezcla bien). Pendiente y folio, según
+  /// [marcaSincronizada]: si la fila cambió mientras el envío iba y volvía, sigue pendiente.
+  Future<void> markSynced(String id, int serverVersion,
+      {int? folio, required int revEnviada, int? folioEnviado}) async {
     final db = await database;
-    // El folio lo escribe el auditor, pero el servidor lo arbitra: si otro equipo ya usaba ese
-    // número, lo devuelve nulo. Se copia TAL CUAL viene —también cuando es nulo— para que la
-    // pantalla no siga mostrando un folio que el servidor no aceptó.
-    final values = <String, Object?>{
-      'dirty': 0,
-      'server_version': serverVersion,
-      'folio': folio,
-    };
-    await db.update('audits', values, where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      final rows = await txn.query('audits', columns: ['local_rev', 'folio'], where: 'id = ?', whereArgs: [id]);
+      if (rows.isEmpty) return;
+      final marca = marcaSincronizada(
+        revEnviada: revEnviada,
+        revActual: (rows.first['local_rev'] as int?) ?? 0,
+        folioEnviado: folioEnviado,
+        folioActual: rows.first['folio'] as int?,
+        folioRespuesta: folio,
+      );
+      await txn.update(
+        'audits',
+        {'dirty': marca.dirty ? 1 : 0, 'server_version': serverVersion, 'folio': marca.folio},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
   }
+
+  /// Marca como subidas las evidencias [ids] sobre la fila RECIÉN LEÍDA (no sobre una copia de antes de subir, que
+  /// pisaría lo que el evaluador editó mientras tanto) y la deja pendiente, para que el dato llegue al servidor. No
+  /// cambia la revisión: el editor abierto conserva lo subido al guardar (upsertLocal).
+  Future<void> marcarEvidenciasSubidas(String auditId, Set<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query('audits', where: 'id = ?', whereArgs: [auditId]);
+      if (rows.isEmpty) return;
+      final a = Audit.fromRow(rows.first);
+      if (marcarSubidas(a.document, ids) == 0) return;
+      await txn.update('audits', {'document': a.document.encode(), 'dirty': 1}, where: 'id = ?', whereArgs: [auditId]);
+    });
+  }
+
+  // ---- Evidencias por borrar en el servidor (papelera vaciada al finalizar) ----
+  // Se borran recién cuando la evaluación que las quitó ya subió: así, si la oficina restauró una mientras tanto, el
+  // servidor la conserva (y su DELETE no borra una evidencia que siga viva en alguna evaluación).
+
+  Future<List<Map<String, String>>> evidenciasPorBorrar() async {
+    final raw = await getValue('evidencias_por_borrar');
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return [
+        for (final e in jsonDecode(raw) as List)
+          if (e is Map && e['a'] is String && e['e'] is String) {'a': e['a'] as String, 'e': e['e'] as String},
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> setEvidenciasPorBorrar(List<Map<String, String>> lista) async =>
+      setValue('evidencias_por_borrar', jsonEncode(lista));
+
+  Future<void> encolarBorrado(String auditId, Iterable<String> evidenciaIds) async {
+    final lista = await evidenciasPorBorrar();
+    for (final id in evidenciaIds) {
+      if (!lista.any((x) => x['e'] == id)) lista.add({'a': auditId, 'e': id});
+    }
+    await setEvidenciasPorBorrar(lista);
+  }
+
+  /// ¿La evaluación sigue con cambios sin subir?
+  Future<bool> isDirty(String id) async {
+    final db = await database;
+    final rows = await db.query('audits', columns: ['dirty'], where: 'id = ?', whereArgs: [id]);
+    return rows.isNotEmpty && ((rows.first['dirty'] as int?) ?? 0) == 1;
+  }
+
+  // ---- Avisos del servidor (se muestran hasta que el evaluador los cierra) ----
+
+  Future<List<String>> getAvisos() async {
+    final raw = await getValue('avisos');
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      return [for (final e in jsonDecode(raw) as List) e.toString()];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> setAvisos(List<String> avisos) async => setValue('avisos', jsonEncode(avisos));
 
   Future<int> pendingCount() async {
     final db = await database;

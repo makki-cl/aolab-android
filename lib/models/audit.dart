@@ -102,7 +102,21 @@ class Evidencia {
       );
 }
 
-/// Punto de control (Auditoría RPN): cosa a inspeccionar dentro de un Sistema, medida en 4
+/// Llave de la copia local que marca un BQ/FC escrito en la tablet y todavía sin volver del servidor.
+const String kLlaveLabLocal = 'appLabLocal';
+
+/// Resultado de laboratorio escrito a mano (BQ o FC): el valor final, sin las lecturas crudas, con fuente «manual».
+/// Es lo mismo que guarda el ingreso a mano de la web (`BactiPanel.SetValorManual`), así el informe lo muestra igual
+/// («ingresado a mano»). Se parte del resultado que había, para no perder sus otros datos.
+Map<String, dynamic> resultadoManual(double valor, {required bool hongos, Map<String, dynamic>? anterior}) => {
+      ...?anterior,
+      'valor': valor,
+      'organismo': hongos ? 'fungi' : 'bacteria',
+      'belowThreshold': false,
+      'fuente': 'manual',
+    };
+
+/// Punto de control (Evaluación RPN): cosa a inspeccionar dentro de un Sistema, medida en 4
 /// dimensiones operacionales (1–5) + comentario + evidencias (fotos/audio).
 class PuntoControl {
   String id;
@@ -121,10 +135,16 @@ class PuntoControl {
   String? comentario;
   List<Evidencia> fotos;
   List<Evidencia> audios;
-  // Resultados de laboratorio (Bactiquant) que se cargan SOLO en la web. La app no los edita,
-  // pero debe transportarlos intactos: si no, al re-pushear borraría el trabajo del laboratorio.
+  // Resultados de laboratorio (BQ y FC). Se cargan en la web (CSV de Bactiquant o a mano) y, desde la versión del
+  // 15-10-2026, también a mano en la tablet, pero solo donde el servidor todavía no tiene uno: un push no cambia un
+  // resultado que ya está (lo manda la web). La app los transporta siempre intactos.
   Map<String, dynamic>? bacti;
   Map<String, dynamic>? bactiHongos;
+  // Los resultados de este punto que escribió el evaluador en ESTA tablet y todavía no vuelven del servidor: 'bq' y/o
+  // 'fc'. Solo viven en la copia local (no se suben). Con ellos la app sabe cuál todavía se puede corregir: un
+  // resultado que ya está en el servidor lo manda la web (el push no cambia uno que el servidor tiene), así que se
+  // muestra sin editar.
+  Set<String> labLocal;
   // ── Foto del modelo con equipos (F3) ──
   // Se llenan al agregar el punto desde un centro con el modelo con equipos activo y quedan como
   // estaban aunque después cambie el modelo (renombrar o mover un equipo no reescribe la historia).
@@ -148,6 +168,7 @@ class PuntoControl {
     this.isDeleted = false,
     this.bacti,
     this.bactiHongos,
+    Set<String>? labLocal,
     this.equipoId,
     this.equipoAlias,
     this.equipoTipo,
@@ -164,14 +185,32 @@ class PuntoControl {
     Map<String, dynamic>? extra,
   })  : fotos = fotos ?? [],
         audios = audios ?? [],
+        labLocal = labLocal ?? <String>{},
         extra = extra ?? {};
 
   static final _llaves = LlavesPropias([
     'id', 'nombre', 'correlativo', 'tipo', 'fromMaster', 'masterId', 'isDeleted', //
     'estadoOperacional', 'limpiezaBiofilm', 'impactoPeces', 'detectabilidad', 'comentario', //
-    'fotos', 'audios', 'bacti', 'bactiHongos', //
+    'fotos', 'audios', 'bacti', 'bactiHongos', kLlaveLabLocal, //
     'equipoId', 'equipoAlias', 'equipoTipo', 'grupo', 'ubicacion', 'referencia',
   ]);
+
+  /// Valor final del BQ (bacterias) y del FC (hongos), o null si no hay.
+  double? get bq => _valor(bacti);
+  double? get fc => _valor(bactiHongos);
+
+  static double? _valor(Map<String, dynamic>? r) {
+    final v = r?['valor'];
+    return v is num ? v.toDouble() : null;
+  }
+
+  /// La posición muestreada en un equipo de bateas / baldes («Rack 3 · Batea 7»). La anota la web; la app solo la
+  /// muestra (viaja en `extra` y no se sube).
+  String? get posicionEtiqueta {
+    final pos = objetoOpcional(extra['posicion']);
+    final et = textoOpcional(pos?['etiqueta'])?.trim();
+    return (et == null || et.isEmpty) ? null : et;
+  }
 
   // La foto del modelo solo se escribe si tiene valor. Así la app nunca manda un null encima de una
   // foto que el servidor sí tiene: una auditoría bajada por la versión anterior de la app (que no
@@ -194,6 +233,8 @@ class PuntoControl {
         'audios': audios.map((e) => e.toJson(ajenas: ajenas)).toList(),
         'bacti': bacti,
         'bactiHongos': bactiHongos,
+        // Solo en la copia local: no viaja al servidor.
+        if (ajenas && labLocal.isNotEmpty) kLlaveLabLocal: (labLocal.toList()..sort()),
         if (equipoId != null) 'equipoId': equipoId,
         if (equipoAlias != null) 'equipoAlias': equipoAlias,
         if (equipoTipo != null) 'equipoTipo': equipoTipo,
@@ -219,6 +260,10 @@ class PuntoControl {
         audios: ((j['audios'] ?? []) as List).map((e) => Evidencia.fromJson((e ?? {}) as Map<String, dynamic>)).toList(),
         bacti: j['bacti'] as Map<String, dynamic>?,
         bactiHongos: j['bactiHongos'] as Map<String, dynamic>?,
+        labLocal: {
+          for (final x in (j[kLlaveLabLocal] is List ? j[kLlaveLabLocal] as List : const []))
+            if (x is String) x,
+        },
         equipoId: textoOpcional(j['equipoId']),
         equipoAlias: textoOpcional(j['equipoAlias']),
         equipoTipo: textoOpcional(j['equipoTipo']),
@@ -297,29 +342,56 @@ class AuditSala {
       );
 }
 
-/// Contenido de la auditoría: respuestas de centro + salas repetibles.
+/// Contenido de la evaluación: respuestas de centro + salas repetibles + qué partes se aplican.
 ///
-/// El documento del servidor tiene mucho más que esto (el informe, los comentarios, la comparativa,
-/// los interruptores de RPN y entrevista…), que la app no edita. Va en `extra`, que se guarda en la
-/// copia local pero NO se sube: la copia de la app puede estar vieja y pisaría lo que se editó en la
-/// web; lo que el push no trae, el servidor lo conserva (fusión de F0).
+/// El documento del servidor tiene mucho más que esto (el informe, los comentarios, la comparativa…), que la app no
+/// edita. Va en `extra`, que se guarda en la copia local pero NO se sube: la copia de la app puede estar vieja y
+/// pisaría lo que se editó en la web; lo que el push no trae, el servidor lo conserva (fusión de F0).
 class AuditDocument {
   Map<String, Answer> center;
   List<AuditSala> salas;
+  // Las partes de la visita que se aplican (backlog 13-10, punto 18.8): la visita nace con nada activo y el evaluador
+  // marca lo que hace, en la web o aquí. true = esa parte NO se hizo. null = el documento no lo trae (una evaluación
+  // anterior, o creada por una app vieja): se lee como «se aplica», igual que en el servidor, y no se sube.
+  bool? entrevistaDesactivada;
+  bool? rpnDesactivado;
+  bool? labDesactivado;
   /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben.
   Map<String, dynamic> extra;
 
-  AuditDocument({Map<String, Answer>? center, List<AuditSala>? salas, Map<String, dynamic>? extra})
-      : center = center ?? {},
+  AuditDocument({
+    Map<String, Answer>? center,
+    List<AuditSala>? salas,
+    this.entrevistaDesactivada,
+    this.rpnDesactivado,
+    this.labDesactivado,
+    Map<String, dynamic>? extra,
+  })  : center = center ?? {},
         salas = salas ?? [],
         extra = extra ?? {};
 
-  static final _llaves = LlavesPropias(['center', 'salas']);
+  /// Una visita nueva, como la crea la web: sin nada activo.
+  factory AuditDocument.nueva() =>
+      AuditDocument(entrevistaDesactivada: true, rpnDesactivado: true, labDesactivado: true);
+
+  bool get aplicaEntrevista => !(entrevistaDesactivada ?? false);
+  bool get aplicaRpn => !(rpnDesactivado ?? false);
+  bool get aplicaLab => !(labDesactivado ?? false);
+  bool get nadaActivo => !aplicaEntrevista && !aplicaRpn && !aplicaLab;
+
+  static final _llaves =
+      LlavesPropias(['center', 'salas', 'entrevistaDesactivada', 'rpnDesactivado', 'labDesactivado']);
 
   /// [ajenas]: true para la copia local (SQLite), false para el push.
+  ///
+  /// Los interruptores sí se suben (los marca el evaluador). Es seguro aunque la copia esté vieja: el servidor mezcla
+  /// contra la copia que esta tablet tenía, así que uno que la tablet no cambió no pisa lo que se marcó en la web.
   Map<String, dynamic> toJson({bool ajenas = true}) => conAjenas({
         'center': center.map((k, v) => MapEntry(k, v.toJson(ajenas: ajenas))),
         'salas': salas.map((s) => s.toJson(ajenas: ajenas)).toList(),
+        if (entrevistaDesactivada != null) 'entrevistaDesactivada': entrevistaDesactivada,
+        if (rpnDesactivado != null) 'rpnDesactivado': rpnDesactivado,
+        if (labDesactivado != null) 'labDesactivado': labDesactivado,
       }, extra, incluir: ajenas);
 
   factory AuditDocument.fromJson(Map<String, dynamic> j) => AuditDocument(
@@ -328,6 +400,9 @@ class AuditDocument {
         salas: ((j['salas'] ?? []) as List)
             .map((s) => AuditSala.fromJson(s as Map<String, dynamic>))
             .toList(),
+        entrevistaDesactivada: booleanoOpcional(j['entrevistaDesactivada']),
+        rpnDesactivado: booleanoOpcional(j['rpnDesactivado']),
+        labDesactivado: booleanoOpcional(j['labDesactivado']),
         extra: _llaves.ajenas(j),
       );
 
@@ -361,6 +436,13 @@ class Audit {
   bool isDeleted;
   int serverVersion;
   bool dirty; // pendiente de subir
+  /// Contador de escrituras del contenido de la fila local (cada guardado, cada copia que baja del servidor). No viaja.
+  /// Con él se sabe si la fila cambió mientras un envío iba y volvía (markSynced) o si el servidor la reemplazó
+  /// mientras el editor la tenía abierta (upsertLocal). Ver app_database.dart.
+  int localRev;
+  /// El folio tal como estaba cuando esta copia se leyó o se guardó por última vez (no se guarda). Si el evaluador no
+  /// lo cambió desde entonces, el que manda es el de la fila: el servidor puede haberlo arbitrado (folio repetido).
+  int? folioLeido;
   /// Campos de la cabecera que esta versión no conoce (hoy `ownerUserId` y `assignedToUserId`;
   /// mañana, por ejemplo, `muestreoId`): se guardan en SQLite (columna `extra`) para que la copia
   /// local quede completa, pero NO se suben. La app no los edita: reenviar su copia, que puede estar
@@ -388,9 +470,11 @@ class Audit {
     this.isDeleted = false,
     this.serverVersion = 0,
     this.dirty = true,
+    this.localRev = 0,
     Map<String, dynamic>? extra,
   })  : document = document ?? AuditDocument(),
-        extra = extra ?? {};
+        extra = extra ?? {},
+        folioLeido = folio;
 
   static final _llaves = LlavesPropias([
     'id', 'status', 'folio', 'type', 'centerName', 'auditor', 'sampledAtUtc', 'centerId', 'clientId', //
@@ -432,6 +516,7 @@ class Audit {
         'is_deleted': isDeleted ? 1 : 0,
         'server_version': serverVersion,
         'dirty': dirty ? 1 : 0,
+        'local_rev': localRev,
         'extra': extra.isEmpty ? null : jsonEncode(extra),
       };
 
@@ -455,6 +540,7 @@ class Audit {
         isDeleted: (r['is_deleted'] as int) == 1,
         serverVersion: r['server_version'] as int,
         dirty: (r['dirty'] as int) == 1,
+        localRev: (r['local_rev'] as int?) ?? 0,
         extra: _decodeExtra(r['extra']),
       );
 
@@ -472,7 +558,10 @@ class Audit {
         'centerId': centerId,
         'clientId': clientId,
         'clientName': clientName,
-        'createdByName': createdByName,
+        // Sin creador (una evaluación creada en la tablet) no se manda: lo pone el servidor con el nombre de quien la
+        // sube. Mandarlo nulo hacía que la copia de la tablet no fuera la del servidor, y el envío siguiente se mezclaba
+        // como atrasado (los interruptores recién marcados quedaban «no aplicados»).
+        if (createdByName != null) 'createdByName': createdByName,
         'scheduledForUtc': scheduledForUtc?.toUtc().toIso8601String(),
         'previousAuditId': previousAuditId,
         'document': document.toJson(ajenas: false),

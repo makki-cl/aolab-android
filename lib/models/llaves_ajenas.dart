@@ -52,3 +52,6 @@ int? enteroOpcional(Object? v) => v is int ? v : (v is num ? v.toInt() : null);
 
 /// Un objeto JSON como mapa, o null si no es un objeto.
 Map<String, dynamic>? objetoOpcional(Object? v) => v is Map ? v.cast<String, dynamic>() : null;
+
+/// Lectura tolerante de un sí/no opcional: null si falta o no es un booleano.
+bool? booleanoOpcional(Object? v) => v is bool ? v : null;

@@ -53,11 +53,28 @@ class AuthService extends ChangeNotifier {
       await _persist(res.data as Map<String, dynamic>, fallbackEmail: email);
       return null;
     } on DioException catch (e) {
-      if (e.response?.statusCode == 401) return 'Correo o contraseña incorrectos.';
+      final code = e.response?.statusCode;
+      if (code == 401) return 'Correo o contraseña incorrectos.';
+      // 403: el correo no está en la lista de acceso. 429: demasiados intentos (la cuenta se bloquea unos minutos).
+      if (code == 403 || code == 429) {
+        return _mensajeDelServidor(e) ??
+            (code == 403
+                ? 'Tu correo no está autorizado para ingresar.'
+                : 'Demasiados intentos fallidos. Prueba de nuevo en unos minutos.');
+      }
       return 'No se pudo conectar con el servidor (${e.message}).';
     } catch (e) {
       return 'Error inesperado: $e';
     }
+  }
+
+  // El texto que manda el servidor en {"message": "..."}, si viene.
+  static String? _mensajeDelServidor(DioException e) {
+    final data = e.response?.data;
+    if (data is Map && data['message'] is String && (data['message'] as String).trim().isNotEmpty) {
+      return data['message'] as String;
+    }
+    return null;
   }
 
   /// Login con Google: abre el selector nativo, obtiene el idToken y lo canjea por
@@ -74,7 +91,7 @@ class AuthService extends ChangeNotifier {
       await _persist(res.data as Map<String, dynamic>, fallbackEmail: account.email);
       return null;
     } on DioException catch (e) {
-      if (e.response?.statusCode == 403) return 'Tu correo no está autorizado para ingresar.';
+      if (e.response?.statusCode == 403) return _mensajeDelServidor(e) ?? 'Tu correo no está autorizado para ingresar.';
       if (e.response?.statusCode == 401) return 'No se pudo validar la cuenta de Google.';
       return 'No se pudo conectar con el servidor (${e.message}).';
     } catch (e) {
