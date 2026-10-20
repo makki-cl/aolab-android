@@ -10,7 +10,17 @@ class MasterSyncService {
 
   MasterSyncService({required this.db, required this.api});
 
+  /// Una vez por versión de la app: se vuelven a bajar los centros completos. Un centro que no cambió desde la última
+  /// sincronización no vuelve a llegar por el cursor, y su copia podía ser de antes de la posición por nivel (19-10-2026).
+  /// Sin cambiar el esquema de la base: la versión anterior de la app la sigue abriendo.
+  static const String _llaveModelo = 'centros_modelo';
+  static const String _modeloVigente = 'niveles-20261020';
+
   Future<void> pull() async {
+    if (await db.getValue(_llaveModelo) != _modeloVigente) {
+      await db.setCenterCursor(0);
+      await db.setValue(_llaveModelo, _modeloVigente);
+    }
     await _pullClients();
     await _pullCenters();
     await _pullUsers();

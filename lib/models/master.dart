@@ -3,6 +3,7 @@
 import 'dart:convert';
 
 import 'llaves_ajenas.dart';
+import 'niveles.dart';
 
 /// Tipos de sistema estándar (lista fija; "Sin Tipo" se representa como null). Es el RESPALDO del
 /// catálogo `sistema-tipo` mientras la app no sincroniza: la misma lista que la semilla del
@@ -94,6 +95,9 @@ class PuntoControlDef {
   String? ubicacion; // entrada | salida | interior | tramo
   String? referencia; // solo tramos: pre | post
   int? orden; // orden del agua dentro del sistema
+  // ── Posición por nivel (19-10-2026): solo en un punto de nivel de un grupo efímero. ──
+  int? nivelGrupo; // hasta qué nivel del grupo se anota la posición (1 = «Rack», 2 = «Balde»)
+  List<NivelGrupoDef> nivelesGrupo; // los niveles del grupo hasta el del punto
   /// Llaves que esta versión no conoce: se guardan y se reemiten tal cual.
   Map<String, dynamic> extra;
 
@@ -108,11 +112,25 @@ class PuntoControlDef {
     this.ubicacion,
     this.referencia,
     this.orden,
+    this.nivelGrupo,
+    List<NivelGrupoDef>? nivelesGrupo,
     Map<String, dynamic>? extra,
-  }) : extra = extra ?? {};
+  })  : nivelesGrupo = nivelesGrupo ?? [],
+        extra = extra ?? {};
 
-  static final _llaves = LlavesPropias(
-      ['id', 'alias', 'tipo', 'equipoId', 'equipoAlias', 'equipoTipo', 'grupo', 'ubicacion', 'referencia', 'orden']);
+  static final _llaves = LlavesPropias([
+    'id', 'alias', 'tipo', 'equipoId', 'equipoAlias', 'equipoTipo', 'grupo', 'ubicacion', 'referencia', 'orden', //
+    'nivelGrupo', 'nivelesGrupo',
+  ]);
+
+  /// Si es un punto de nivel de un grupo efímero, lo que hace falta para anotar su posición (null si no lo es). El grupo
+  /// es su equipo: el aplanado entrega el punto de un nivel como punto del equipo-grupo.
+  NivelPunto? get nivelPunto {
+    final n = nivelGrupo;
+    if (n == null || n < 1 || nivelesGrupo.isEmpty) return null;
+    final niveles = [...nivelesGrupo]..sort((a, b) => a.nivel.compareTo(b.nivel));
+    return NivelPunto(grupoId: equipoId ?? id, nivel: n > niveles.length ? niveles.length : n, niveles: niveles);
+  }
 
   // Los campos nuevos solo se escriben si tienen valor: el blob de un centro en el modelo plano
   // queda igual que antes.
@@ -127,6 +145,8 @@ class PuntoControlDef {
         if (ubicacion != null) 'ubicacion': ubicacion,
         if (referencia != null) 'referencia': referencia,
         if (orden != null) 'orden': orden,
+        if (nivelGrupo != null) 'nivelGrupo': nivelGrupo,
+        if (nivelesGrupo.isNotEmpty) 'nivelesGrupo': nivelesGrupo.map((n) => n.toJson()).toList(),
       }, extra);
 
   factory PuntoControlDef.fromJson(Map<String, dynamic> j) => PuntoControlDef(
@@ -140,6 +160,11 @@ class PuntoControlDef {
         ubicacion: textoOpcional(j['ubicacion']),
         referencia: textoOpcional(j['referencia']),
         orden: enteroOpcional(j['orden']),
+        nivelGrupo: enteroOpcional(j['nivelGrupo']),
+        nivelesGrupo: (j['nivelesGrupo'] is List ? j['nivelesGrupo'] as List : const [])
+            .map(NivelGrupoDef.fromJson)
+            .whereType<NivelGrupoDef>()
+            .toList(),
         extra: _llaves.ajenas(j),
       );
 }

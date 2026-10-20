@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'llaves_ajenas.dart';
+import 'niveles.dart';
 
 /// Estados de la auditoría (0/1/2/3 — coinciden con el backend; scheduled AL FINAL).
 enum AuditStatus { draft, submitted, reviewed, scheduled }
@@ -116,6 +117,34 @@ Map<String, dynamic> resultadoManual(double valor, {required bool hongos, Map<St
       'fuente': 'manual',
     };
 
+/// Llave de la copia local que marca la posición por nivel anotada en ESTA tablet y que todavía no está en el servidor.
+/// Solo con ella la posición se puede corregir en la tablet: una que el servidor ya tiene la manda la web (un envío no
+/// cambia una que allá existe), así que se muestra de solo lectura.
+const String kLlaveNivelesLocal = 'appNivelesLocal';
+
+/// Un nivel de la posición de una muestra en un grupo efímero (`PosicionNivelDto`): 1, 2 o 3, la posición (principio,
+/// medio o final) y el número o código del miembro. Lo vacío no se escribe, igual que en el servidor.
+class PosicionNivel {
+  int nivel;
+  String? posicion;
+  String? numero;
+
+  PosicionNivel({required this.nivel, this.posicion, this.numero});
+
+  Map<String, dynamic> toJson() => {
+        'nivel': nivel,
+        if (posicion != null) 'posicion': posicion,
+        if (numero != null) 'numero': numero,
+      };
+
+  static PosicionNivel? fromJson(Object? j) {
+    final m = objetoOpcional(j);
+    final nivel = enteroOpcional(m?['nivel']);
+    if (m == null || nivel == null) return null;
+    return PosicionNivel(nivel: nivel, posicion: textoOpcional(m['posicion']), numero: textoOpcional(m['numero']));
+  }
+}
+
 /// Punto de control (Evaluación RPN): cosa a inspeccionar dentro de un Sistema, medida en 4
 /// dimensiones operacionales (1–5) + comentario + evidencias (fotos/audio).
 class PuntoControl {
@@ -155,6 +184,11 @@ class PuntoControl {
   String? grupo; // afluente | equipo | tramo | efluente
   String? ubicacion; // entrada | salida | interior | tramo
   String? referencia; // solo tramos: pre | post
+  // ── Posición por nivel (19-10-2026): solo en un punto de nivel de un grupo efímero. Varias muestras del mismo punto
+  // («+ Otro rack») son varios puntos del documento con el mismo masterId, cada uno con sus niveles. ──
+  List<PosicionNivel>? niveles;
+  String? nivelesEtiqueta; // la foto con los nombres del modelo: «Rack 17 (final) › Balde 1844 (principio)»
+  bool nivelesLocal; // anotada en esta tablet y todavía no en el servidor (solo en la copia local)
   /// Llaves que esta versión no conoce: se guardan en la copia local, no se suben.
   Map<String, dynamic> extra;
 
@@ -175,6 +209,9 @@ class PuntoControl {
     this.grupo,
     this.ubicacion,
     this.referencia,
+    this.niveles,
+    this.nivelesEtiqueta,
+    this.nivelesLocal = false,
     this.estadoOperacional,
     this.limpiezaBiofilm,
     this.impactoPeces,
@@ -192,8 +229,16 @@ class PuntoControl {
     'id', 'nombre', 'correlativo', 'tipo', 'fromMaster', 'masterId', 'isDeleted', //
     'estadoOperacional', 'limpiezaBiofilm', 'impactoPeces', 'detectabilidad', 'comentario', //
     'fotos', 'audios', 'bacti', 'bactiHongos', kLlaveLabLocal, //
-    'equipoId', 'equipoAlias', 'equipoTipo', 'grupo', 'ubicacion', 'referencia',
+    'equipoId', 'equipoAlias', 'equipoTipo', 'grupo', 'ubicacion', 'referencia', //
+    'niveles', 'nivelesEtiqueta', kLlaveNivelesLocal,
   ]);
+
+  /// La posición por nivel anotada (vacía si no tiene).
+  NivelesMuestra get nivelesMuestra =>
+      NivelesMuestra.de((niveles ?? const <PosicionNivel>[]).map((x) => (nivel: x.nivel, posicion: x.posicion, numero: x.numero)));
+
+  /// ¿Tiene posición por nivel anotada?
+  bool get tieneNiveles => niveles != null && niveles!.isNotEmpty;
 
   /// Valor final del BQ (bacterias) y del FC (hongos), o null si no hay.
   double? get bq => _valor(bacti);
@@ -241,6 +286,11 @@ class PuntoControl {
         if (grupo != null) 'grupo': grupo,
         if (ubicacion != null) 'ubicacion': ubicacion,
         if (referencia != null) 'referencia': referencia,
+        // La posición por nivel viaja (el servidor la llena si allá no hay; si ya tiene una, conserva la suya). Sin
+        // valor no se escribe: la llave queda como la deja el servidor.
+        if (niveles != null && niveles!.isNotEmpty) 'niveles': niveles!.map((x) => x.toJson()).toList(),
+        if (nivelesEtiqueta != null) 'nivelesEtiqueta': nivelesEtiqueta,
+        if (ajenas && nivelesLocal) kLlaveNivelesLocal: true,
       }, extra, incluir: ajenas);
 
   factory PuntoControl.fromJson(Map<String, dynamic> j) => PuntoControl(
@@ -270,8 +320,17 @@ class PuntoControl {
         grupo: textoOpcional(j['grupo']),
         ubicacion: textoOpcional(j['ubicacion']),
         referencia: textoOpcional(j['referencia']),
+        niveles: _leerNiveles(j['niveles']),
+        nivelesEtiqueta: textoOpcional(j['nivelesEtiqueta']),
+        nivelesLocal: j[kLlaveNivelesLocal] == true,
         extra: _llaves.ajenas(j),
       );
+
+  static List<PosicionNivel>? _leerNiveles(Object? v) {
+    if (v is! List) return null;
+    final l = v.map(PosicionNivel.fromJson).whereType<PosicionNivel>().toList();
+    return l.isEmpty ? null : l;
+  }
 }
 
 /// Un Sistema evaluado dentro del centro (transversal a Entrevista e Inspección/RPN).
@@ -492,6 +551,18 @@ class Audit {
   }
 
   AuditStatus get statusEnum => auditStatusFromInt(status);
+
+  /// Cuándo se compartió con el cliente (lo trae el pull desde el 20-10-2026). Una evaluación compartida se edita en la
+  /// tablet, pero se finaliza en la web: el cliente ya la ve.
+  DateTime? get compartidaConClienteUtc {
+    final v = extra['sharedWithClientUtc'];
+    return v is String ? DateTime.tryParse(v) : null;
+  }
+
+  bool get compartida {
+    final v = extra['sharedWithClientUtc'];
+    return v is String && v.trim().isNotEmpty;
+  }
   AuditType get typeEnum => auditTypeFromInt(type);
   bool get isLocked => statusEnum.isLocked;
 

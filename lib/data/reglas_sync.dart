@@ -69,6 +69,39 @@ void conservarSubidas(AuditDocument destino, AuditDocument guardado) {
   if (subidas.isNotEmpty) marcarSubidas(destino, subidas);
 }
 
+/// Las muestras de [doc] cuya posición por nivel ya está en el servidor: el envío que la llevaba volvió aplicado (si el
+/// servidor no tenía una, quedó esta; si tenía, conservó la suya). Desde ahí se corrige en la web.
+Set<String> puntosConNiveles(AuditDocument doc) => {
+      for (final s in doc.salas)
+        for (final p in s.puntosControl)
+          if (p.tieneNiveles) p.id,
+    };
+
+/// Marca como ya en el servidor la posición de los puntos [ids]. Devuelve cuántos cambiaron.
+int marcarNivelesEnServidor(AuditDocument doc, Set<String> ids) {
+  var n = 0;
+  for (final s in doc.salas) {
+    for (final p in s.puntosControl) {
+      if (p.nivelesLocal && ids.contains(p.id)) {
+        p.nivelesLocal = false;
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
+/// Lo que la fila guardada ya tiene en el servidor no vuelve a ser «de esta tablet» por una copia en memoria más vieja
+/// (el editor abierto mientras subía): si volviera, la tablet dejaría corregir una posición que el servidor ya no acepta.
+void conservarNivelesEnServidor(AuditDocument destino, AuditDocument guardado) {
+  final enServidor = {
+    for (final s in guardado.salas)
+      for (final p in s.puntosControl)
+        if (p.tieneNiveles && !p.nivelesLocal) p.id,
+  };
+  if (enServidor.isNotEmpty) marcarNivelesEnServidor(destino, enServidor);
+}
+
 /// El mensaje del servidor (`SeccionesAuditoria.AmbasDesactivadas`): para finalizar hace falta el RPN o el laboratorio.
 const String kAmbasDesactivadas =
     'Para finalizar, marca la evaluación de terreno (RPN) o el laboratorio (BQ/FC): sin ninguna de las dos, '
