@@ -12,6 +12,7 @@ import 'services/media_service.dart';
 import 'services/template_service.dart';
 import 'ui/audit_list_screen.dart';
 import 'ui/login_screen.dart';
+import 'ui/tema.dart';
 
 /// Lo local de la tablet para el cambio de usuario: la base y los archivos de las evidencias.
 class _DatosDeLaTablet implements DatosLocales {
@@ -96,10 +97,7 @@ class AolabApp extends StatelessWidget {
           GlobalCupertinoLocalizations.delegate,
         ],
         supportedLocales: const [Locale('es'), Locale('en')],
-        theme: ThemeData(
-          colorSchemeSeed: const Color(0xFF2D58FF),
-          useMaterial3: true,
-        ),
+        theme: temaAolab(),
         // La UI raíz reacciona al estado de autenticación. Una sesión vencida sigue en la lista (con lo local) y pide
         // entrar de nuevo desde ahí.
         home: Consumer<AuthService>(

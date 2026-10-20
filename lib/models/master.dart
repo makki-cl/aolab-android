@@ -1,5 +1,7 @@
 /// Maestros read-only sincronizados desde la web (solo pull). Se usan para poblar
 /// los selectores de cliente/centro/auditor al crear/editar una auditoría en terreno.
+library;
+
 import 'dart:convert';
 
 import 'llaves_ajenas.dart';

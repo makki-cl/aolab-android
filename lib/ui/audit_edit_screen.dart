@@ -19,10 +19,12 @@ import '../models/numeros.dart';
 import '../models/questionnaire.dart';
 import '../services/audit_sync_service.dart';
 import '../services/auth_service.dart';
+import '../services/evidencias_en_fila.dart';
 import '../services/media_service.dart';
 import '../services/template_service.dart';
 import 'estilo_modelo.dart';
 import 'niveles_muestra.dart';
+import 'tema.dart';
 
 class AuditEditScreen extends StatefulWidget {
   final String auditId;
@@ -60,7 +62,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   int _recSeconds = 0;
   Timer? _recTimer;
   final Set<String> _silentAudios = {};
-  final AudioPlayer _player = AudioPlayer();
+  AudioPlayer? _player; // se crea al reproducir el primer audio
 
   // Formulario de "sistema adicional" (pestaña Sistemas).
   final TextEditingController _newSalaName = TextEditingController();
@@ -122,11 +124,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   // Gating: Entrevista (2), Evaluación RPN (3) y Muestreo (4) requieren centro asignado.
   void _onTabChanged() {
     if (_tab.indexIsChanging && _tab.index >= 2 && (_audit?.centerId == null)) {
-      _tab.animateTo(1); // vuelve a Sistemas
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Selecciona el centro en Identificación')));
-      }
+      _tab.animateTo(0); // a Identificación, donde se elige
+      _avisar('Elige el centro en Identificación.');
     }
   }
 
@@ -134,6 +133,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) _guardarYa();
+    // En segundo plano Android corta el micrófono (y puede matar la app): el audio en curso se detiene y se guarda.
+    if (state == AppLifecycleState.paused) _guardarGrabacion();
   }
 
   /// Guarda lo pendiente sin esperar (al salir de la pantalla o al pasar a segundo plano).
@@ -152,9 +153,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _sync.removeListener(_onSync);
     _guardarYa();
     _saveTimer?.cancel();
-    _recTimer?.cancel();
-    if (_recPunto != null) _media.cancelRecording();
-    _player.dispose();
+    _guardarGrabacion(); // el audio en curso se detiene y se guarda, no se descarta
+    _player?.dispose();
     _newSalaName.dispose();
     _tab.removeListener(_onTabChanged);
     _tab.dispose();
@@ -418,7 +418,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     }
     for (final s in _audit!.document.salas) {
       if (s.fromMaster && (s.masterId == null || s.masterId!.isEmpty) &&
-          s.name.trim().toLowerCase() == m.nombre.trim().toLowerCase()) return s;
+          s.name.trim().toLowerCase() == m.nombre.trim().toLowerCase()) {
+        return s;
+      }
     }
     return null;
   }
@@ -490,10 +492,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     await _saveNow();
     a.status = newStatus;
     a.updatedAtUtc = DateTime.now().toUtc();
-    await context.read<AppDatabase>().upsertLocal(a);
+    await _db.upsertLocal(a);
     if (!mounted) return;
     setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    _avisar(msg);
   }
 
   // ── Llave con Bactiquant: el "Sample ID" del frasco es {folio}-{correlativo} ──
@@ -603,14 +605,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       _badgeColor(s.questions.isNotEmpty ? s.questions.first.code : s.code);
 
   Widget _badge(String text, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(
           color: c.withValues(alpha: 0.10),
           border: Border.all(color: c.withValues(alpha: 0.34)),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Text(text,
-            style: TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
+            style: TextStyle(color: c, fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.2)),
       );
 
   // ── Sistemas de la evaluación en el orden de la lista lateral del editor, con su tipo ──
@@ -649,6 +651,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     if (_audit == null) {
       return Scaffold(appBar: AppBar(), body: const Center(child: Text('No se encontró la evaluación.')));
     }
+    // Sin caché, la plantilla puede llegar después (se refresca en segundo plano).
+    _tpl ??= context.watch<TemplateService>().template;
     if (_tpl == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Evaluación')),
@@ -660,17 +664,17 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     }
 
     final a = _audit!;
-    final date = a.scheduledForUtc ?? a.sampledAtUtc;
-    final title = date != null ? '${a.centerName} · ${_fmt(date)}' : a.centerName;
+    final date = a.scheduledForUtc ?? a.sampledAtUtc ?? a.createdAtUtc;
+    final title = '${a.tituloCentro} · ${_fmt(date)}';
 
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontSize: 16)),
-            Text('${a.clientName ?? 'Sin cliente'} · ${a.statusEnum.label}',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal)),
+            Text(title, style: const TextStyle(fontSize: 17), overflow: TextOverflow.ellipsis),
+            Text([if (a.folio != null) 'Folio ${a.folio}', if (a.clientName != null) a.clientName!, a.statusEnum.label].join(' · '),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.normal), overflow: TextOverflow.ellipsis),
           ],
         ),
         actions: [
@@ -679,7 +683,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           else
             Padding(
               padding: const EdgeInsets.only(right: 12),
-              child: Center(child: Text(_saving ? 'Guardando…' : 'Guardado', style: const TextStyle(fontSize: 12))),
+              child: Center(child: Text(_saving ? 'Guardando…' : 'Guardado', style: const TextStyle(fontSize: 13))),
             ),
         ],
         bottom: TabBar(
@@ -715,8 +719,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   // Tab con etiqueta atenuada cuando está deshabilitado (gating por centro).
   Widget _gatedTab(IconData icon, String label, bool enabled) => Tab(
-        icon: Icon(icon, color: enabled ? null : Colors.grey.withValues(alpha: 0.5)),
-        child: Text(label, style: TextStyle(color: enabled ? null : Colors.grey.withValues(alpha: 0.5))),
+        icon: Icon(icon, color: enabled ? null : const Color(0xFF94A3B8)),
+        child: Text(label, style: TextStyle(color: enabled ? null : const Color(0xFF94A3B8))),
       );
 
   // Acciones al inicio: guardar + iniciar/finalizar.
@@ -759,7 +763,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               child: ListTile(
                 leading: Icon(Icons.lock_outline),
                 title: Text('Evaluación finalizada'),
-                subtitle: Text('Los datos quedan fijos (solo lectura).'),
               ),
             ),
           _headerCard(a),
@@ -781,7 +784,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             child: ListTile(
               leading: Icon(Icons.lock_outline),
               title: Text('Evaluación finalizada'),
-              subtitle: Text('Los datos quedan fijos (solo lectura).'),
             ),
           ),
         _seccionAplicada('la entrevista', d.aplicaEntrevista, (v) => _aplicarSeccion((x) => d.entrevistaDesactivada = x, v)),
@@ -836,16 +838,18 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   // Aviso cuando aún no hay centro: Entrevista/RPN dependen de él.
   Widget _needCenterNotice() => ListView(
         padding: const EdgeInsets.all(12),
-        children: const [
-          Card(
-            color: Color(0xFFFFF7E6),
-            child: ListTile(
-              leading: Icon(Icons.info_outline, color: Color(0xFFB7791F)),
-              title: Text('Define el centro en la pestaña Identificación'),
-              subtitle: Text('Los sistemas y su cuestionario dependen del centro asignado.'),
-            ),
-          ),
-        ],
+        children: [_avisoCentro()],
+      );
+
+  // Falta el centro: el aviso lleva a Identificación, donde se elige.
+  Widget _avisoCentro() => Card(
+        color: Colores.avisoFondo,
+        child: ListTile(
+          leading: const Icon(Icons.info_outline, color: Colores.avisoIcono),
+          title: const Text('Falta el centro', style: TextStyle(fontWeight: FontWeight.w600, color: Colores.avisoTexto)),
+          trailing: FilledButton(onPressed: () => _tab.animateTo(0), child: const Text('Elegir')),
+          onTap: () => _tab.animateTo(0),
+        ),
       );
 
   // ── Pestaña 2: SISTEMAS (define los sistemas transversales a Entrevista y RPN) ──
@@ -866,7 +870,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   if (activos.isEmpty)
-                    const Text('Sin sistemas.', style: TextStyle(color: Colors.grey))
+                    const Text('Sin sistemas.', style: TextStyle(color: Colores.texto2))
                   else
                     for (final s in _salasOrdenadas(a)) _sistemaReadonlyRow(s),
                 ],
@@ -892,14 +896,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           padding: EdgeInsets.only(bottom: 8),
           child: Text('Sistemas a evaluar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         ),
-        if (a.centerId == null)
-          const Card(
-            color: Color(0xFFFFF7E6),
-            child: ListTile(
-              leading: Icon(Icons.info_outline, color: Color(0xFFB7791F)),
-              title: Text('Selecciona primero el centro en la pestaña Identificación.'),
-            ),
-          ),
+        if (a.centerId == null) _avisoCentro(),
         // Sistemas del maestro del centro: marcar cuáles se auditan (nombre/tipo se editan en el centro).
         if (master.isNotEmpty) _masterSistemasCard(master),
         if (fuera.isNotEmpty) _fueraDelMaestroCard(fuera),
@@ -984,7 +981,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           if (ficha != null) ...[const SizedBox(width: 8), FichaClase(texto: ficha, clase: clase)],
           const SizedBox(width: 6),
           if (s.fromMaster)
-            const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey))
+            const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colores.texto2))
           else
             _badge('adicional', const Color(0xFF566873)),
         ]),
@@ -1037,7 +1034,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               value: included,
               onChanged: _locked ? null : (v) => _toggleMaster(m, v ?? false),
             ),
-            Icon(estilo.icono, size: 20, color: included ? estilo.tinta : const Color(0xFF8A93A2)),
+            Icon(estilo.icono, size: 22, color: included ? estilo.tinta : const Color(0xFF64748B)),
             const SizedBox(width: 6),
             Expanded(
               child: Text(m.nombre,
@@ -1067,6 +1064,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                     icon: const Icon(Icons.add, size: 20),
                     label: const Text('Agregar punto adicional'),
                   ),
+                if (!_locked) _papeleraPuntos(current, soloAdicionales: true),
               ]),
             ),
         ]),
@@ -1097,7 +1095,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _grupoTitulo(String titulo) => Padding(
         padding: const EdgeInsets.only(top: 10, bottom: 2),
         child: Text(titulo.toUpperCase(),
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.6, color: Color(0xFF475569))),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 0.5, color: Colores.texto2)),
       );
 
   // Título de un equipo dentro de «Equipos»: su alias y, si no lo dice ya, su tipo estándar.
@@ -1119,7 +1117,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _nombreConTipo(String nombre, String? tipo, {bool activo = true, double tamano = 14, FontWeight peso = FontWeight.w600}) =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
         Text(nombre, style: TextStyle(fontSize: tamano, fontWeight: peso, color: activo ? null : const Color(0xFF5A6474))),
-        if (tipo != null) Text(tipo, style: const TextStyle(fontSize: 12.5, color: Color(0xFF5A6474))),
+        if (tipo != null) Text(tipo, style: const TextStyle(fontSize: 13, color: Colores.texto2)),
       ]);
 
   Widget _masterPuntoRow(AuditSala sala, PuntoControlDef pd) {
@@ -1202,28 +1200,24 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   Widget _posicionSoloLectura(PuntoControl p) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(etiquetaNiveles(p) ?? 'Sin posición', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-        if (!_locked) const Text('Se corrige en la web', style: TextStyle(fontSize: 12.5, color: Color(0xFF5A6474))),
+        if (!_locked) const Text('Se corrige en la web', style: TextStyle(fontSize: 13, color: Colores.texto2)),
       ]);
 
   // Un punto marcado que el maestro ya no trae (retirado o del modelo anterior): se ve marcado y se
   // puede desmarcar (queda en la papelera, como al desmarcar cualquier punto del maestro).
   Widget _fueraPuntoRow(PuntoControl p) => Row(children: [
-        SizedBox(
-          width: 34, height: 34,
-          child: Checkbox(
-            value: true,
-            visualDensity: VisualDensity.compact,
-            onChanged: _locked
-                ? null
-                : (v) {
-                    if (v == false) {
-                      setState(() => p.isDeleted = true);
-                      _scheduleSave();
-                    }
-                  },
-          ),
+        Checkbox(
+          value: true,
+          onChanged: _locked
+              ? null
+              : (v) {
+                  if (v == false) {
+                    setState(() => p.isDeleted = true);
+                    _scheduleSave();
+                  }
+                },
         ),
-        Expanded(child: Text(p.nombre, style: const TextStyle(fontSize: 13))),
+        Expanded(child: Text(p.nombre, style: const TextStyle(fontSize: 14))),
         if (p.tipo != null && p.tipo!.isNotEmpty) ...[_badge(p.tipo!, const Color(0xFF2D58FF)), const SizedBox(width: 4)],
         _badge('fuera del modelo', const Color(0xFF566873)),
       ]);
@@ -1246,7 +1240,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           if (!_locked)
             IconButton(
               icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
-              onPressed: () { setState(() => sala.puntosControl.remove(p)); _scheduleSave(); },
+              tooltip: 'Quitar punto',
+              onPressed: () => _removePunto(sala, p),
             ),
         ]),
       );
@@ -1298,10 +1293,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                 ),
               ),
               const SizedBox(height: 8),
-              if (adhoc.isEmpty)
-                const Text('Sin sistemas adicionales.', style: TextStyle(color: Colors.grey))
-              else
-                for (final sala in adhoc) _adhocSistemaRow(sala),
+              for (final sala in adhoc) _adhocSistemaRow(sala),
             ],
           ),
         ),
@@ -1408,9 +1400,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           if (puntos.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text('Sin puntos marcados.', style: TextStyle(color: Color(0xFF5A6474))),
+              child: Text('Sin puntos marcados.', style: TextStyle(color: Colores.texto2)),
             ),
-          for (final p in puntos) _puntoMuestreoRow(sistema, p),
+          ..._agrupadas(sistema, puntos, (p) => _puntoMuestreoRow(sistema, p)),
         ]),
       ),
     );
@@ -1466,7 +1458,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
           decoration: BoxDecoration(color: const Color(0xFF2D58FF), borderRadius: BorderRadius.circular(6)),
           child: Text('${p.correlativo}',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
         ),
       );
     }
@@ -1504,7 +1496,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     if (!editable) {
       return InputDecorator(
         decoration: _dec().copyWith(
-          labelText: '$sigla value',
+          labelText: sigla,
           helperText: res == null ? null : _origenLab(res),
         ),
         child: Text(valor == null ? '—' : formatoNumero(valor), style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -1515,7 +1507,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       initialValue: valor == null ? null : formatoNumero(valor),
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       decoration: _dec().copyWith(
-        labelText: '$sigla value',
+        labelText: sigla,
         hintText: 'ej. 1.234,5',
         helperText: valor == null ? null : '= ${formatoNumero(valor)} · a mano',
       ),
@@ -1577,7 +1569,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       ],
       if (sistema.fromMaster) ...[
         const SizedBox(width: 6),
-        const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey)),
+        const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colores.texto2)),
       ],
     ]);
   }
@@ -1592,21 +1584,23 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           child: ExpansionTile(
             initiallyExpanded: true,
             title: _sistemaTitle(sistema),
+            expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             children: [
-              for (final p in puntos) _puntoCard(sistema, p),
+              ..._agrupadas(sistema, puntos, (p) => _puntoCard(sistema, p)),
               if (puntos.isEmpty)
                 const Padding(
                     padding: EdgeInsets.symmetric(vertical: 6),
-                    child: Text('Sin puntos de control aún.', style: TextStyle(color: Colors.grey))),
+                    child: Text('Sin puntos de control aún.', style: TextStyle(color: Colores.texto2))),
               if (!_locked)
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                       onPressed: () => _addPunto(sistema),
-                      icon: const Icon(Icons.add, size: 18),
+                      icon: const Icon(Icons.add, size: 20),
                       label: const Text('Agregar punto de control')),
                 ),
+              if (!_locked) _papeleraPuntos(sistema),
             ],
           ),
         ),
@@ -1614,6 +1608,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Widget _puntoCard(AuditSala sistema, PuntoControl p) => Container(
+        key: ValueKey('rpn-${p.id}'),
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
@@ -1641,7 +1636,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               ),
               if (!_locked)
                 IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                    tooltip: 'Quitar punto',
+                    icon: const Icon(Icons.delete_outline, color: Colores.peligro),
                     onPressed: () => _removePunto(sistema, p)),
             ]),
             // Ad-hoc: selector de tipo estándar (el maestro define el de sus puntos).
@@ -1711,7 +1707,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text('${_recSeconds}s', style: const TextStyle(fontSize: 12, color: Color(0xFF556173))),
+                Text('${_recSeconds}s', style: const TextStyle(fontSize: 14, color: Colores.texto2)),
                 const SizedBox(width: 4),
                 IconButton(
                     icon: const Icon(Icons.stop_circle, color: Colors.red),
@@ -1747,10 +1743,11 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(color: const Color(0xFFFFF3E0), borderRadius: BorderRadius.circular(6)),
-            child: const Text('sin voz detectada', style: TextStyle(fontSize: 11, color: Color(0xFFB7791F), fontWeight: FontWeight.w600)),
+            child: const Text('sin voz detectada', style: TextStyle(fontSize: 13, color: Colores.avisoTexto, fontWeight: FontWeight.w600)),
           ),
         const Spacer(),
-        if (!ev.uploaded) const Icon(Icons.cloud_upload_outlined, size: 16, color: Color(0xFFE0A030)),
+        if (!ev.uploaded)
+          const Tooltip(message: 'Falta subir', child: Icon(Icons.cloud_upload_outlined, size: 20, color: Colores.pendiente)),
         if (!_locked)
           IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.red),
@@ -1781,17 +1778,12 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final p = _recPunto;
     setState(() => _recPunto = null);
     final res = await _media.stopRecording();
-    if (res.ev != null && p != null) {
-      setState(() {
-        p.audios.add(res.ev!);
-        if (res.silent) _silentAudios.add(res.ev!.id);
-      });
-      _scheduleSave();
-      if (res.silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            backgroundColor: Colors.orange,
-            content: Text('No se detectó voz. Revisa el micrófono y regraba si es necesario.')));
-      }
+    final ev = res.ev;
+    if (ev == null || p == null) return;
+    if (res.silent) _silentAudios.add(ev.id);
+    _pegarEvidencia(p.id, ev, audio: true);
+    if (res.silent) {
+      _avisar('No se detectó voz. Revisa el micrófono y regraba si es necesario.');
     }
   }
 
@@ -1801,10 +1793,64 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     if (mounted) setState(() => _recPunto = null);
   }
 
+  /// Detiene la grabación en curso y la deja en su punto (al salir de la pantalla o al pasar a segundo plano): lo
+  /// grabado no se descarta.
+  Future<void> _guardarGrabacion() async {
+    final p = _recPunto;
+    if (p == null) return;
+    _recTimer?.cancel();
+    _recPunto = null;
+    final a = _audit;
+    final res = await _media.stopRecording();
+    final ev = res.ev;
+    if (ev == null || a == null) return;
+    if (mounted && identical(a, _audit)) {
+      _pegarEvidencia(p.id, ev, audio: true, guardarAlTiro: true);
+    } else {
+      await agregarEvidenciaEnFila(_db, a.id, p.id, ev, audio: true);
+    }
+  }
+
+  /// El punto con ese id en la evaluación que está en pantalla (puede haberse recargado mientras la cámara o el
+  /// micrófono estaban abiertos).
+  PuntoControl? _puntoVigente(String id) {
+    final a = _audit;
+    return a == null ? null : puntoPorId(a.document, id);
+  }
+
+  /// Pega una foto o un audio recién tomado a su punto: aparece al tiro, queda guardado en la tablet y se intenta
+  /// subir en segundo plano (sin señal, lo sube la sincronización). Si la pantalla ya se cerró, va directo a la fila.
+  void _pegarEvidencia(String puntoId, Evidencia ev, {bool audio = false, bool guardarAlTiro = false}) {
+    final auditId = _audit?.id ?? widget.auditId;
+    final p = mounted ? _puntoVigente(puntoId) : null;
+    if (p == null || _locked) {
+      agregarEvidenciaEnFila(_db, auditId, puntoId, ev, audio: audio);
+      return;
+    }
+    setState(() => (audio ? p.audios : p.fotos).add(ev));
+    if (guardarAlTiro) {
+      _saveTimer?.cancel();
+      _saveNow();
+    } else {
+      _scheduleSave();
+    }
+    _subirEnSegundoPlano(auditId, ev);
+  }
+
+  void _subirEnSegundoPlano(String auditId, Evidencia ev) {
+    _media.subir(ev).then((ok) async {
+      if (!ok) return;
+      ev.uploaded = true;
+      await _db.marcarEvidenciasSubidas(auditId, {ev.id});
+      if (mounted) setState(() {});
+    }).catchError((Object _) {});
+  }
+
   Future<void> _playAudio(Evidencia ev) async {
     try {
-      await _player.stop();
-      await _player.play(DeviceFileSource(_media.fileFor(ev.id).path));
+      final player = _player ??= AudioPlayer();
+      await player.stop();
+      await player.play(DeviceFileSource(_media.fileFor(ev.id).path));
     } catch (_) {}
   }
 
@@ -1838,6 +1884,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     return t != null && t.isNotEmpty ? {'Authorization': 'Bearer $t'} : {};
   }
 
+  static const double _lado = 96; // miniatura de foto
+
   Widget _fotosRow(PuntoControl p) => Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Wrap(spacing: 8, runSpacing: 8, children: [
@@ -1847,12 +1895,12 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               onTap: () => _addFoto(p),
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                width: 72, height: 72,
-                decoration: BoxDecoration(border: Border.all(color: const Color(0xFFDDE2EC)), borderRadius: BorderRadius.circular(8)),
+                width: _lado, height: _lado,
+                decoration: BoxDecoration(border: Border.all(color: Colores.borde), borderRadius: BorderRadius.circular(8)),
                 child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.add_a_photo_outlined, color: Color(0xFF556173)),
-                  SizedBox(height: 2),
-                  Text('Foto', style: TextStyle(fontSize: 11, color: Color(0xFF556173))),
+                  Icon(Icons.add_a_photo_outlined, color: Colores.texto2, size: 28),
+                  SizedBox(height: 4),
+                  Text('Foto', style: TextStyle(fontSize: 14, color: Colores.texto2)),
                 ]),
               ),
             ),
@@ -1863,32 +1911,53 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final f = _media.fileFor(ev.id);
     final local = f.existsSync();
     final Widget img = local
-        ? Image.file(f, width: 72, height: 72, fit: BoxFit.cover)
+        ? Image.file(f, width: _lado, height: _lado, fit: BoxFit.cover)
         : Image.network(
             '${AppConfig.apiBaseUrl}/api/evidencias/${ev.id}',
-            width: 72, height: 72, fit: BoxFit.cover, headers: _authHeaders(),
+            width: _lado, height: _lado, fit: BoxFit.cover, headers: _authHeaders(),
             errorBuilder: (_, __, ___) => Container(
-                width: 72, height: 72, color: const Color(0xFFF4F6FB),
-                child: const Icon(Icons.image_not_supported_outlined, color: Colors.grey)),
+                width: _lado, height: _lado, color: const Color(0xFFF4F6FB),
+                child: const Icon(Icons.image_not_supported_outlined, color: Colores.texto2)),
           );
     return SizedBox(
-      width: 72, height: 72,
-      child: Stack(clipBehavior: Clip.none, children: [
+      key: ValueKey('foto-${ev.id}'),
+      width: _lado, height: _lado,
+      child: Stack(children: [
         GestureDetector(
           onTap: () => _openViewer(p, ev),
           child: ClipRRect(borderRadius: BorderRadius.circular(8), child: img),
         ),
         if (!ev.uploaded)
-          const Positioned(bottom: 2, left: 2, child: Icon(Icons.cloud_upload_outlined, size: 16, color: Color(0xFFE0A030))),
+          const Positioned(
+            bottom: 4, left: 4,
+            child: Tooltip(
+              message: 'Falta subir',
+              child: CircleAvatar(
+                radius: 13, backgroundColor: Colors.white,
+                child: Icon(Icons.cloud_upload_outlined, size: 18, color: Colores.pendiente),
+              ),
+            ),
+          ),
+        // Quitar: el área táctil es de 48 dp (la marca visible es más chica).
         if (!_locked)
           Positioned(
-            top: -6, right: -6,
-            child: GestureDetector(
-              onTap: () => _removeFoto(p, ev),
-              child: Container(
-                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                padding: const EdgeInsets.all(3),
-                child: const Icon(Icons.close, size: 14, color: Colors.white),
+            top: 0, right: 0,
+            child: Semantics(
+              button: true,
+              label: 'Quitar foto',
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () => _removeFoto(p, ev),
+                child: SizedBox(
+                  width: 48, height: 48,
+                  child: Center(
+                    child: Container(
+                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      padding: const EdgeInsets.all(4),
+                      child: const Icon(Icons.close, size: 18, color: Colors.white),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -1899,29 +1968,31 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Future<void> _addFoto(PuntoControl p) async {
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
-      builder: (_) => SafeArea(
+      builder: (ctx) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(
               leading: const Icon(Icons.photo_camera_outlined),
               title: const Text('Tomar foto'),
-              onTap: () => Navigator.pop(context, ImageSource.camera)),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera)),
           ListTile(
               leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Elegir de galería'),
-              onTap: () => Navigator.pop(context, ImageSource.gallery)),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery)),
         ]),
       ),
     );
-    if (source == null) return;
+    if (source == null || !mounted) return;
+    final auditId = _audit!.id;
+    final puntoId = p.id;
+    // Si Android cierra la app con la cámara abierta, al volver se sabe a qué punto iba la foto (FotoEnCurso).
+    await FotoEnCurso.anotar(_db, auditId, puntoId);
     try {
       final ev = await _media.capturePhoto(source: source);
-      if (ev == null) return;
-      setState(() => p.fotos.add(ev));
-      _scheduleSave();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo capturar la foto: $e')));
-      }
+      if (ev != null) _pegarEvidencia(puntoId, ev);
+    } catch (_) {
+      _avisar('No se pudo guardar la foto. Prueba de nuevo.');
+    } finally {
+      await FotoEnCurso.limpiar(_db);
     }
   }
 
@@ -1940,7 +2011,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       width: size, height: size, fit: fit, headers: _authHeaders(),
       errorBuilder: (_, __, ___) => Container(
           width: size, height: size, color: const Color(0xFFF4F6FB),
-          child: const Icon(Icons.image_not_supported_outlined, color: Colors.grey)),
+          child: const Icon(Icons.image_not_supported_outlined, color: Colores.texto2)),
     );
   }
 
@@ -1973,7 +2044,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           childrenPadding: const EdgeInsets.only(bottom: 4),
           leading: const Icon(Icons.delete_outline, size: 20, color: Color(0xFF556173)),
           title: Text('Papelera (${delFotos.length + delAudios.length})',
-              style: const TextStyle(fontSize: 13, color: Color(0xFF556173), fontWeight: FontWeight.w600)),
+              style: const TextStyle(fontSize: 14, color: Colores.texto2, fontWeight: FontWeight.w600)),
           children: [
             for (final ev in delFotos) _trashItem(ev, isFoto: true),
             for (final ev in delAudios) _trashItem(ev, isFoto: false),
@@ -2037,7 +2108,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           const Padding(
             padding: EdgeInsets.only(top: 2, bottom: 4),
             child: Text('EVALUACIÓN DE TERRENO  (1 = MEJOR · 5 = PEOR)',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3, color: Color(0xFF000E3F))),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 0.2, color: Color(0xFF000E3F))),
           ),
           for (var i = 0; i < _dims.length; i++) _dimRow(p, i),
         ],
@@ -2053,17 +2124,22 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            RichText(
-              text: TextSpan(style: const TextStyle(fontSize: 14), children: [
-                TextSpan(text: d['l'] as String, style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF1C7293))),
-                TextSpan(text: ' · ${d['n']}', style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF000E3F))),
-              ]),
-            ),
-            const Spacer(),
             Flexible(
+              flex: 3,
+              child: Text.rich(
+                overflow: TextOverflow.ellipsis,
+                TextSpan(style: const TextStyle(fontSize: 14), children: [
+                  TextSpan(text: d['l'] as String, style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF1C7293))),
+                  TextSpan(text: ' · ${d['n']}', style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF000E3F))),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 2,
               child: Text(val != null ? e[val - 1] : 'Selecciona',
                   textAlign: TextAlign.right, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF556173))),
+                  style: const TextStyle(fontSize: 13, color: Colores.texto2)),
             ),
           ]),
           const SizedBox(height: 6),
@@ -2084,7 +2160,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       onTap: _locked ? null : onTap,
       borderRadius: BorderRadius.circular(10),
       child: Container(
-        height: 42, alignment: Alignment.center,
+        height: 48, alignment: Alignment.center,
         decoration: BoxDecoration(
           color: sel ? color : Colors.white,
           border: Border.all(color: sel ? color : const Color(0xFFDDE2EC)),
@@ -2110,9 +2186,86 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _scheduleSave();
   }
 
-  void _removePunto(AuditSala sistema, PuntoControl p) {
-    setState(() => sistema.puntosControl.remove(p));
+  // Un punto adicional recién agregado y sin nada anotado: se quita sin preguntar (no hay nada que perder).
+  bool _enBlanco(PuntoControl p) =>
+      !p.fromMaster &&
+      p.nombre.trim().isEmpty &&
+      p.correlativo == null &&
+      p.estadoOperacional == null &&
+      p.limpiezaBiofilm == null &&
+      p.impactoPeces == null &&
+      p.detectabilidad == null &&
+      (p.comentario ?? '').trim().isEmpty &&
+      p.fotos.isEmpty &&
+      p.audios.isEmpty;
+
+  /// Quitar un punto (desde RPN o desde Sistemas) lo manda a la papelera del sistema, con confirmación, igual que
+  /// desmarcarlo: conserva lo anotado y se puede restaurar.
+  Future<void> _removePunto(AuditSala sistema, PuntoControl p) async {
+    if (!_enBlanco(p)) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Quitar punto'),
+          content: Text('¿Quitar «${nombrePunto(p)}» de la evaluación? Queda en la papelera del sistema con lo anotado.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colores.peligro),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Quitar'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => p.isDeleted = true);
     _scheduleSave();
+  }
+
+  // Papelera de puntos de un sistema: los quitados que tienen algo que recuperar.
+  // En Sistemas, solo los adicionales: los del maestro se recuperan volviendo a marcarlos.
+  Widget _papeleraPuntos(AuditSala sistema, {bool soloAdicionales = false}) {
+    final l = sistema.puntosControl.where((p) => p.isDeleted && !_enBlanco(p) && !(soloAdicionales && p.fromMaster)).toList();
+    if (l.isEmpty) return const SizedBox.shrink();
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        leading: const Icon(Icons.delete_outline, color: Colores.texto2),
+        title: Text('Papelera (${l.length})',
+            style: const TextStyle(fontSize: 14, color: Colores.texto2, fontWeight: FontWeight.w600)),
+        children: [
+          for (final p in l)
+            Row(children: [
+              Expanded(child: Text(nombrePunto(p), style: const TextStyle(fontSize: 14))),
+              TextButton.icon(
+                onPressed: () {
+                  setState(() => p.isDeleted = false);
+                  _scheduleSave();
+                },
+                icon: const Icon(Icons.restore_from_trash, size: 20),
+                label: const Text('Restaurar'),
+              ),
+            ]),
+        ],
+      ),
+    );
+  }
+
+  /// Las muestras de un sistema agrupadas como en la pestaña Sistemas (grupo › equipo), en el orden del agua.
+  List<Widget> _agrupadas(AuditSala sistema, List<PuntoControl> puntos, Widget Function(PuntoControl) fila) {
+    final m = _conEquipos ? sistemaDelMaestro(sistema, _masterSistemas) : null;
+    return [
+      for (final sec in agruparMuestras(puntos, m)) ...[
+        if (sec.titulo != null) _grupoTitulo(sec.titulo!),
+        for (final b in sec.bloques) ...[
+          if (b.titulo != null) _equipoTitulo(BloquePuntos(titulo: b.titulo, equipoTipo: b.equipoTipo, puntos: const [])),
+          for (final p in b.puntos) fila(p),
+        ],
+      ],
+    ];
   }
 
   String _fmt(DateTime utc) {
@@ -2445,15 +2598,15 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   // ── Sala colapsable completa (Entrevista). El nombre/tipo se gestionan en la pestaña Sistemas. ──
+  // Con la franja y el ícono de su tipo, como en Sistemas, RPN y Muestreo.
   Widget _salaCard(AuditSala sala) {
-    return Card(
+    return ConFranja(
+      clase: _claseSala(sala),
       margin: const EdgeInsets.only(bottom: 12),
-      clipBehavior: Clip.antiAlias,
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           initiallyExpanded: true,
-          leading: const Icon(Icons.warehouse_outlined),
           title: _sistemaTitle(sala),
           childrenPadding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           children: [
@@ -2483,7 +2636,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           if (q.help.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 2, bottom: 4),
-              child: Text(q.help, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+              child: Text(q.help, style: const TextStyle(fontSize: 13, color: Colores.texto2)),
             ),
           const SizedBox(height: 4),
           _answerBody(a),
@@ -2494,7 +2647,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   // Menú contextual del comentario (equivalente móvil del clic derecho).
   Widget _commentMenu(Answer a) => PopupMenuButton<String>(
-        icon: Icon(Icons.more_vert, size: 20, color: Colors.grey.shade600),
+        icon: const Icon(Icons.more_vert, size: 22, color: Colores.texto2),
         tooltip: 'Opciones',
         onSelected: (_) => _toggleComment(a),
         itemBuilder: (_) => [

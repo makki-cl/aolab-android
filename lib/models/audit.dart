@@ -566,6 +566,12 @@ class Audit {
   AuditType get typeEnum => auditTypeFromInt(type);
   bool get isLocked => statusEnum.isLocked;
 
+  /// El centro para los títulos; una evaluación recién creada todavía no tiene: «Evaluación nueva».
+  String get tituloCentro {
+    final c = centerName.trim();
+    return c.isEmpty || c == '(sin nombre)' ? 'Evaluación nueva' : c;
+  }
+
   // ---- SQLite ----
   Map<String, Object?> toRow() => {
         'id': id,

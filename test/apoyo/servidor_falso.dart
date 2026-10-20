@@ -12,6 +12,9 @@ class ServidorFalso implements HttpClientAdapter {
   final Map<String, Object Function(RequestOptions)> rutas = {};
   final List<RequestOptions> pedidos = [];
 
+  /// Rutas que tardan en responder (mala señal).
+  final Map<String, Duration> demoras = {};
+
   void responder(String ruta, int status, Object? body) => rutas[ruta] = (_) => (status: status, body: body);
 
   void fallar(String ruta, DioExceptionType tipo) =>
@@ -22,6 +25,8 @@ class ServidorFalso implements HttpClientAdapter {
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     pedidos.add(options);
+    final demora = demoras['${options.method} ${options.path}'];
+    if (demora != null) await Future<void>.delayed(demora);
     final r = rutas['${options.method} ${options.path}'];
     if (r == null) return ResponseBody.fromString('', 404);
     final x = r(options);
