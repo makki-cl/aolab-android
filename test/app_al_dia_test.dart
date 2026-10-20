@@ -206,6 +206,23 @@ void main() {
       expect([for (final e in evidenciasDe(fila.document)) (e.id, e.uploaded)], [('f1', false), ('f2', true)]);
     });
 
+    test('una foto «sin subir» que llegó de otro equipo no deja la evaluación por subir en esta tablet', () {
+      final a = Audit.fromDto(visitaDeLaWeb())
+        ..dirty = false
+        ..document.salas.single.puntosControl.single.fotos.add(Evidencia(id: 'de-otra-tablet', uploaded: false));
+      // Sin saber qué archivos hay aquí, cuenta (como antes).
+      expect(quedaPorSubir(a), isTrue);
+      // El archivo no está en esta tablet: no la puede subir, y no debe impedir el cambio de usuario.
+      expect(quedaPorSubir(a, enEstaTablet: (_) => false), isFalse);
+      // Una que sí se tomó aquí y falta subir, sí.
+      a.document.salas.single.puntosControl.single.fotos.add(Evidencia(id: 'de-aqui', uploaded: false));
+      expect(quedaPorSubir(a, enEstaTablet: (id) => id == 'de-aqui'), isTrue);
+      // Y con cambios sin subir, siempre.
+      a.document.salas.single.puntosControl.single.fotos.removeLast();
+      a.dirty = true;
+      expect(quedaPorSubir(a, enEstaTablet: (_) => false), isTrue);
+    });
+
     test('la revisión local y el folio leído no viajan', () {
       final a = Audit.fromDto(visitaDeLaWeb())
         ..localRev = 9

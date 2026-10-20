@@ -104,8 +104,9 @@ class _AuditListScreenState extends State<AuditListScreen> {
 
   Future<void> _reload() async {
     final db = context.read<AppDatabase>();
+    final media = context.read<MediaService>();
     final audits = await db.visibleAudits();
-    final pending = await db.pendientesDeSubir();
+    final pending = await pendientesDeLaTablet(db, media);
     if (!mounted) return;
     setState(() {
       _audits = audits;
@@ -130,7 +131,8 @@ class _AuditListScreenState extends State<AuditListScreen> {
   Future<void> _cerrarSesion() async {
     final auth = context.read<AuthService>();
     final db = context.read<AppDatabase>();
-    final pendientes = await db.pendientesDeSubir();
+    final media = context.read<MediaService>();
+    final pendientes = await pendientesDeLaTablet(db, media);
     if (!mounted) return;
     final r = await showDialog<String>(
       context: context,

@@ -85,9 +85,8 @@ class BaseEnMemoria extends AppDatabase {
   }
 
   @override
-  Future<int> pendientesDeSubir() async => audits.values
-      .where((a) => a.dirty || evidenciasDe(a.document).any((e) => !e.uploaded && !e.isDeleted))
-      .length;
+  Future<int> pendientesDeSubir({bool Function(String evidenciaId)? enEstaTablet}) async =>
+      audits.values.where((a) => quedaPorSubir(a, enEstaTablet: enEstaTablet)).length;
 }
 
 /// Evidencias sin cámara ni micrófono: la «cámara» devuelve un archivo de prueba, el micrófono graba al tiro y lo que

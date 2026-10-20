@@ -7,6 +7,7 @@ import 'config.dart';
 import 'data/app_database.dart';
 import 'services/audit_sync_service.dart';
 import 'services/auth_service.dart';
+import 'services/evidencias_en_fila.dart';
 import 'services/master_sync_service.dart';
 import 'services/media_service.dart';
 import 'services/template_service.dart';
@@ -21,7 +22,7 @@ class _DatosDeLaTablet implements DatosLocales {
   _DatosDeLaTablet(this.db, this.media);
 
   @override
-  Future<int> pendientes() => db.pendientesDeSubir();
+  Future<int> pendientes() => pendientesDeLaTablet(db, media);
 
   @override
   Future<void> borrarTodo() async {

@@ -102,6 +102,14 @@ void conservarNivelesEnServidor(AuditDocument destino, AuditDocument guardado) {
   if (enServidor.isNotEmpty) marcarNivelesEnServidor(destino, enServidor);
 }
 
+/// ¿A esta evaluación le queda algo que ESTA tablet tiene que subir? Cambios sin subir, o una foto o un audio sin subir
+/// cuyo archivo está aquí. Una evidencia que llegó «sin subir» en el documento de otro equipo (su foto no alcanzó a subir
+/// allá) no es de esta tablet: no la puede subir y no debe dejarla «por subir» para siempre ni impedir el cambio de
+/// usuario. Sin [enEstaTablet], cuenta todas (como antes).
+bool quedaPorSubir(Audit a, {bool Function(String evidenciaId)? enEstaTablet}) =>
+    a.dirty ||
+    evidenciasDe(a.document).any((e) => !e.uploaded && !e.isDeleted && (enEstaTablet == null || enEstaTablet(e.id)));
+
 /// El mensaje del servidor (`SeccionesAuditoria.AmbasDesactivadas`): para finalizar hace falta el RPN o el laboratorio.
 const String kAmbasDesactivadas =
     'Para finalizar, marca la evaluación de terreno (RPN) o el laboratorio (BQ/FC): sin ninguna de las dos, '

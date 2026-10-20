@@ -5,6 +5,12 @@ import '../models/audit.dart';
 import '../models/modelo_puntos.dart';
 import 'media_service.dart';
 
+/// Lo que esta tablet tiene por subir (las evidencias, solo si su archivo está aquí: ver [quedaPorSubir]).
+Future<int> pendientesDeLaTablet(AppDatabase db, MediaService media) async {
+  await media.dirPath();
+  return db.pendientesDeSubir(enEstaTablet: media.hasLocal);
+}
+
 /// El punto de la evaluación con ese id (en cualquier sistema), o null.
 PuntoControl? puntoPorId(AuditDocument d, String id) {
   for (final s in d.salas) {

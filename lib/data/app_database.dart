@@ -344,14 +344,14 @@ class AppDatabase {
   // ---- Lo que no ha salido de la tablet y el cambio de usuario ----
 
   /// Cuántas evaluaciones tienen algo que todavía no está en el servidor: cambios sin subir o una foto o un audio sin
-  /// subir (puede quedar uno aunque el envío haya salido, si la evidencia falló).
-  Future<int> pendientesDeSubir() async {
+  /// subir (puede quedar uno aunque el envío haya salido, si la evidencia falló). Con [enEstaTablet], solo cuentan las
+  /// evidencias cuyo archivo está en esta tablet (ver [quedaPorSubir]).
+  Future<int> pendientesDeSubir({bool Function(String evidenciaId)? enEstaTablet}) async {
     final db = await database;
     final rows = await db.query('audits');
     var n = 0;
     for (final r in rows) {
-      final a = Audit.fromRow(r);
-      if (a.dirty || evidenciasDe(a.document).any((e) => !e.uploaded && !e.isDeleted)) n++;
+      if (quedaPorSubir(Audit.fromRow(r), enEstaTablet: enEstaTablet)) n++;
     }
     return n;
   }
