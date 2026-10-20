@@ -11,14 +11,18 @@ import '../config.dart';
 import '../data/app_database.dart';
 import '../data/reglas_sync.dart';
 import '../models/audit.dart';
+import '../models/clases_sistema.dart';
 import '../models/master.dart';
 import '../models/modelo_puntos.dart';
+import '../models/niveles.dart';
 import '../models/numeros.dart';
 import '../models/questionnaire.dart';
 import '../services/audit_sync_service.dart';
 import '../services/auth_service.dart';
 import '../services/media_service.dart';
 import '../services/template_service.dart';
+import 'estilo_modelo.dart';
+import 'niveles_muestra.dart';
 
 class AuditEditScreen extends StatefulWidget {
   final String auditId;
@@ -28,9 +32,10 @@ class AuditEditScreen extends StatefulWidget {
   State<AuditEditScreen> createState() => _AuditEditScreenState();
 }
 
-class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProviderStateMixin {
+class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final TabController _tab;
   late final MediaService _media;
+  late final AppDatabase _db;
   late final AuditSyncService _sync;
   int _ciclosVistos = 0;
   // Sube cuando la evaluación se recarga desde la fila (el servidor la reemplazó mientras estaba abierta): los campos
@@ -67,7 +72,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _tab = TabController(length: 5, vsync: this);
     _tab.addListener(_onTabChanged);
     _media = context.read<MediaService>();
+    _db = context.read<AppDatabase>();
     _sync = context.read<AuditSyncService>();
+    WidgetsBinding.instance.addObserver(this);
     _ciclosVistos = _sync.ciclos;
     _sync.addListener(_onSync);
     _load();
@@ -101,6 +108,8 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final folioCambio = fila.folio != a.folio && a.folio == a.folioLeido;
     a.serverVersion = fila.serverVersion;
     a.dirty = fila.dirty;
+    // La posición que acaba de subir ya no se corrige en la tablet.
+    conservarNivelesEnServidor(a.document, fila.document);
     if (folioCambio) {
       a.folio = fila.folio;
       a.folioLeido = fila.folio;
@@ -121,9 +130,27 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     }
   }
 
+  // Android puede matar la app en segundo plano: lo anotado se guarda al tiro, sin esperar el medio segundo.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) _guardarYa();
+  }
+
+  /// Guarda lo pendiente sin esperar (al salir de la pantalla o al pasar a segundo plano).
+  void _guardarYa() {
+    if (!(_saveTimer?.isActive ?? false)) return;
+    _saveTimer?.cancel();
+    final a = _audit;
+    if (a == null || _locked) return;
+    a.updatedAtUtc = DateTime.now().toUtc();
+    _db.upsertLocal(a);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sync.removeListener(_onSync);
+    _guardarYa();
     _saveTimer?.cancel();
     _recTimer?.cancel();
     if (_recPunto != null) _media.cancelRecording();
@@ -163,14 +190,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     if (_locked) return;
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 500), _saveNow);
-    if (!_saving) setState(() => _saving = true);
+    if (!_saving && mounted) setState(() => _saving = true);
   }
 
   Future<void> _saveNow() async {
     final a = _audit;
     if (a == null || _locked) return;
     a.updatedAtUtc = DateTime.now().toUtc();
-    await context.read<AppDatabase>().upsertLocal(a);
+    await _db.upsertLocal(a);
     if (mounted) setState(() => _saving = false);
   }
 
@@ -275,23 +302,104 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   bool _puntoIncluido(AuditSala sala, PuntoControlDef pd) => sala.puntosControl.any((p) =>
       !p.isDeleted && p.fromMaster && esMismoPunto(p, pd));
 
-  // Marca/desmarca un punto del maestro a auditar. Desmarcar = soft-delete.
-  // El punto nuevo lleva la foto del maestro: nombre y tipo y, en un centro activado, su equipo,
-  // su grupo y su ubicación (puntoDesdeMaestro). El RPN se sigue capturando por punto, como siempre.
-  void _togglePunto(AuditSala sala, PuntoControlDef pd, bool include) {
-    final existing = sala.puntosControl.where((p) => p.fromMaster && esMismoPunto(p, pd));
-    setState(() {
-      if (include) {
-        if (existing.isEmpty) {
-          sala.puntosControl.add(puntoDesdeMaestro(pd, id: const Uuid().v4(), conEquipos: _conEquipos));
-        } else {
-          existing.first.isDeleted = false;
-        }
-      } else if (existing.isNotEmpty) {
-        existing.first.isDeleted = true;
-      }
-    });
+  // Marca/desmarca un punto del maestro a auditar. Desmarcar = soft-delete de todas sus muestras (un punto de nivel puede
+  // tener varias: «+ Otro rack»); con más de una, se pregunta antes. El punto nuevo lleva la foto del maestro: nombre y
+  // tipo y, en un centro activado, su equipo, su grupo y su ubicación (puntoDesdeMaestro).
+  Future<void> _togglePunto(AuditSala sala, PuntoControlDef pd, bool include) async {
+    if (include) {
+      setState(() => incluirPunto(sala, pd, conEquipos: _conEquipos, nuevoId: () => const Uuid().v4()));
+      _scheduleSave();
+      return;
+    }
+    final n = muestrasDe(sala, pd).length;
+    if (n > 1) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Quitar las muestras'),
+          content: Text('«${pd.alias}» tiene $n muestras en esta evaluación. ¿Quitarlas todas?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: Text('Quitar las $n')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => quitarPunto(sala, pd));
     _scheduleSave();
+  }
+
+  // «+ Otro rack»: otra muestra del mismo punto de nivel, con los niveles de arriba como la última.
+  void _otraMuestra(AuditSala sala, PuntoControlDef pd, NivelPunto ng) {
+    final l = muestrasDe(sala, pd);
+    setState(() => sala.puntosControl
+        .add(otraMuestra(pd, ng, ultima: l.isEmpty ? null : l.last, conEquipos: _conEquipos, id: const Uuid().v4())));
+    _scheduleSave();
+  }
+
+  // Quita una muestra de un punto de nivel (a la papelera, como desmarcar).
+  void _quitarMuestra(PuntoControl p) {
+    setState(() => p.isDeleted = true);
+    _scheduleSave();
+  }
+
+  /// Anota la posición por nivel de una muestra. Si pone a un rack ya anotado en la evaluación en otra posición, pregunta
+  /// si cambiarla en todas sus muestras (las que se pueden cambiar en la tablet); si no, no la cambia: un mismo rack
+  /// tiene una sola posición en la visita.
+  Future<void> _cambiarNiveles(PuntoControl p, NivelPunto ng, NivelesMuestra n) async {
+    final a = _audit;
+    if (a == null || _locked || !posicionEditable(p)) return;
+    final normal = PosicionesNivel.normalizarNumeros(ng, n).niveles;
+    final reuso = reusoDelDocumento(a.document, ng.grupoId, excepto: p);
+    final choque = reuso.conflicto(ng.grupoId, normal, ng.nombres);
+    if (choque != null) {
+      final otros = [
+        for (final s in a.document.salas.where((s) => !s.isDeleted))
+          for (final x in s.puntosControl)
+            if (!x.isDeleted && !identical(x, p) && x.tieneNiveles && (x.equipoId ?? '') == ng.grupoId &&
+                ReusoNiveles.alinear(x.nivelesMuestra, normal) != x.nivelesMuestra)
+              x,
+      ];
+      if (otros.any((x) => !posicionEditable(x))) {
+        _avisar('$choque Las muestras que ya subieron se corrigen en la web.');
+        setState(() {});
+        return;
+      }
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('¿Cambiar en todas?'),
+          content: Text('$choque ${otros.length == 1 ? 'Hay 1 muestra más' : 'Hay ${otros.length} muestras más'} '
+              'de esta evaluación con ese miembro.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Cambiar en todas')),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (ok != true) {
+        setState(() {});
+        return;
+      }
+      for (final x in otros) {
+        anotarNiveles(x, ng, ReusoNiveles.alinear(x.nivelesMuestra, normal));
+      }
+    }
+    final error = anotarNiveles(p, ng, n);
+    if (error != null) {
+      _avisar(error);
+      if (mounted) setState(() {});
+      return;
+    }
+    if (mounted) setState(() {});
+    _scheduleSave();
+  }
+
+  void _avisar(String texto) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(texto)));
   }
 
   // Agrega un punto adicional (no detectado) al sistema.
@@ -323,11 +431,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         if (existing == null) {
           _addSalaFromMaster(m);
         } else {
+          // Vuelve tal como estaba: su nombre y su foto son los de la evaluación (un sistema renombrado en la web no se
+          // renombra solo por desmarcarlo y volver a marcarlo).
           existing.isDeleted = false;
-          existing.name = m.nombre;
-          existing.tipo = m.tipo;
-          existing.afluente = _afluenteSnapshot(m);
-          if (_conEquipos) existing.etapa = m.etapa;
         }
       } else if (existing != null) {
         existing.isDeleted = true;
@@ -507,25 +613,35 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             style: TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
       );
 
-  // Chip de afluente (con gota). Null/vacío = no muestra nada.
-  Widget _afluenteChip(String? afluente) {
-    if (afluente == null || afluente.isEmpty) return const SizedBox.shrink();
-    const c = Color(0xFF0E7490);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-      decoration: BoxDecoration(
-        color: c.withValues(alpha: 0.10),
-        border: Border.all(color: c.withValues(alpha: 0.34)),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.water_drop_outlined, size: 11, color: c),
-        const SizedBox(width: 3),
-        Text(afluente,
-            style: const TextStyle(color: c, fontSize: 10.5, fontWeight: FontWeight.w700, letterSpacing: 0.3)),
-      ]),
-    );
+  // ── Sistemas de la evaluación en el orden de la lista lateral del editor, con su tipo ──
+
+  /// Los sistemas vigentes de la evaluación por tipo (Afluente → Tratamiento → Proceso → Tratamiento de Salmón →
+  /// Efluente) y, dentro, como el maestro; los adicionales al final.
+  List<AuditSala> _salasOrdenadas(Audit a) => ordenarSalas(a.document.salas.where((s) => !s.isDeleted).toList(), _masterSistemas);
+
+  String? _claseSala(AuditSala s) => _conEquipos ? claseDeSala(s, _masterSistemas) : null;
+
+  /// Las tarjetas de los sistemas con el encabezado de su tipo cuando cambia (solo en un centro con el modelo con equipos).
+  List<Widget> _porClase(List<AuditSala> salas, Widget Function(AuditSala) tarjeta) {
+    final l = <Widget>[];
+    String? anterior = '';
+    for (final s in salas) {
+      final c = _claseSala(s);
+      if (_conEquipos && c != anterior) {
+        if (c != null) l.add(EncabezadoClase(clase: c, cantidad: salas.where((x) => _claseSala(x) == c).length));
+        anterior = c;
+      }
+      l.add(tarjeta(s));
+    }
+    return l;
   }
+
+  /// Los puntos vigentes de un sistema en el orden del agua (el del maestro).
+  List<PuntoControl> _puntosOrdenados(AuditSala s) =>
+      ordenarPuntos(s.puntosControl.where((p) => !p.isDeleted).toList(), sistemaDelMaestro(s, _masterSistemas));
+
+  /// El punto de nivel del maestro de una muestra (null si no es de nivel o el maestro no lo trae).
+  NivelPunto? _nivelDe(AuditSala s, PuntoControl p) => defDelPunto(p, sistemaDelMaestro(s, _masterSistemas))?.nivelPunto;
 
   @override
   Widget build(BuildContext context) {
@@ -583,7 +699,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       body: Column(
         children: [
           if (!_locked) _topActions(a),
-          if (!_locked && a.document.nadaActivo) _avisoNadaActivo(),
           Expanded(
             child: KeyedSubtree(
               key: ValueKey('gen-$_gen'),
@@ -608,14 +723,23 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _topActions(Audit a) => Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
         child: Row(children: [
-          FilledButton.tonalIcon(
-              onPressed: _saveNow, icon: const Icon(Icons.save_outlined, size: 18), label: const Text('Guardar')),
-          const SizedBox(width: 8),
           if (a.statusEnum == AuditStatus.scheduled)
             OutlinedButton.icon(
                 onPressed: _startAudit,
                 icon: const Icon(Icons.play_arrow, size: 18),
                 label: const Text('Iniciar'))
+          // Compartida con el cliente: se edita aquí, pero se finaliza en la web (el cliente ya la ve).
+          else if (a.statusEnum == AuditStatus.draft && a.compartida)
+            const Expanded(
+              child: Row(children: [
+                Icon(Icons.public, size: 18, color: Color(0xFF475569)),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text('Compartida con el cliente: se finaliza en la web',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF475569))),
+                ),
+              ]),
+            )
           else if (a.statusEnum == AuditStatus.draft)
             OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.green),
@@ -660,15 +784,12 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               subtitle: Text('Los datos quedan fijos (solo lectura).'),
             ),
           ),
-        _seccionAplicada('la entrevista', d.aplicaEntrevista, (v) => _aplicarSeccion((x) => d.entrevistaDesactivada = x, v),
-            'Sin entrevista, el informe no incluye sus respuestas. El resto de la evaluación sigue igual.'),
-        if (!d.aplicaEntrevista)
-          _infoCard('La entrevista está marcada como no aplicada. Vuelve a activarla arriba si sí se hizo.')
-        else ...[
+        _seccionAplicada('la entrevista', d.aplicaEntrevista, (v) => _aplicarSeccion((x) => d.entrevistaDesactivada = x, v)),
+        if (d.aplicaEntrevista) ...[
           for (final sec in _centerSections) _sectionCard(sec, d.center),
           const SizedBox(height: 8),
           if (activas.isEmpty) _infoCard('Define los sistemas a evaluar en la pestaña Sistemas.'),
-          for (final sala in activas) _salaCard(sala),
+          ..._porClase(_salasOrdenadas(a), _salaCard),
         ],
         const SizedBox(height: 40),
       ],
@@ -677,7 +798,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   // ── Las partes de la visita (como la web): «Se aplica … en esta evaluación». La visita nace con nada activo y el
   // evaluador marca lo que hace. Apagada, esa parte no se hizo y el informe sale sin ella. ──
-  Widget _seccionAplicada(String que, bool aplica, ValueChanged<bool> cambiar, String explicacion) {
+  Widget _seccionAplicada(String que, bool aplica, ValueChanged<bool> cambiar) {
     const naranjo = Color(0xFFC2410C);
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -687,20 +808,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         side: BorderSide(color: aplica ? const Color(0xFFE1E6F0) : naranjo.withValues(alpha: 0.5)),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(4, 0, 12, 10),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SwitchListTile(
-            value: aplica,
-            onChanged: _locked ? null : cambiar,
-            contentPadding: const EdgeInsets.only(left: 8),
-            title: Text('Se aplica $que en esta evaluación',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 8),
-            child: Text(explicacion, style: const TextStyle(fontSize: 12, color: Color(0xFF556173))),
-          ),
-        ]),
+        padding: const EdgeInsets.fromLTRB(4, 0, 12, 0),
+        child: SwitchListTile(
+          value: aplica,
+          onChanged: _locked ? null : cambiar,
+          contentPadding: const EdgeInsets.only(left: 8),
+          title: Text('Se aplica $que en esta evaluación',
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+        ),
       ),
     );
   }
@@ -715,24 +830,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: ListTile(
           leading: const Icon(Icons.info_outline, color: Color(0xFF2D58FF)),
           title: Text(texto, style: const TextStyle(fontSize: 14)),
-        ),
-      );
-
-  // Visita sin nada activo: lo mismo que avisa la web arriba del editor.
-  Widget _avisoNadaActivo() => Container(
-        width: double.infinity,
-        margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFFEFF6FF),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFBFD3FF)),
-        ),
-        child: const Text(
-          'Todavía no se aplica nada en esta evaluación: marca en su pestaña la entrevista, la evaluación de terreno '
-          '(RPN) o el laboratorio (Muestreo), según lo que se haga en la visita. Para finalizarla hace falta el RPN o el '
-          'laboratorio.',
-          style: TextStyle(fontSize: 12.5, color: Color(0xFF1E3A8A)),
         ),
       );
 
@@ -771,7 +868,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                   if (activos.isEmpty)
                     const Text('Sin sistemas.', style: TextStyle(color: Colors.grey))
                   else
-                    for (final s in activos) _sistemaReadonlyRow(s),
+                    for (final s in _salasOrdenadas(a)) _sistemaReadonlyRow(s),
                 ],
               ),
             ),
@@ -791,11 +888,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        const Text('Sistemas a evaluar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         const Padding(
-          padding: EdgeInsets.only(top: 2, bottom: 12),
-          child: Text('Los sistemas son transversales: alimentan la Entrevista, la Evaluación RPN y el Muestreo.',
-              style: TextStyle(fontSize: 13, color: Color(0xFF556173))),
+          padding: EdgeInsets.only(bottom: 8),
+          child: Text('Sistemas a evaluar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
         ),
         if (a.centerId == null)
           const Card(
@@ -847,12 +942,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                 const SizedBox(width: 8),
                 _badge('retirados', const Color(0xFF566873)),
               ]),
-              const Padding(
-                padding: EdgeInsets.only(top: 2, bottom: 6),
-                child: Text('Estaban marcados, pero el centro ya no los ofrece: se retiraron o son del modelo anterior. '
-                    'Puedes quitarlos de esta evaluación.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
-              ),
+              const SizedBox(height: 6),
               for (final s in fuera)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
@@ -879,21 +969,19 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       );
 
   // Fila de solo lectura de un sistema auditado (past-proof / bloqueada).
-  Widget _sistemaReadonlyRow(AuditSala s) => Padding(
+  Widget _sistemaReadonlyRow(AuditSala s) {
+    final clase = _claseSala(s);
+    final ficha = fichaSala(s, _masterSistemas, conEquipos: _conEquipos);
+    return Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(children: [
-          const Icon(Icons.warehouse_outlined, size: 20, color: Color(0xFF2D58FF)),
+          Icon(estiloDe(clase).icono, size: 20, color: estiloDe(clase).tinta),
           const SizedBox(width: 8),
           Flexible(
             child: Text(s.name.isEmpty ? 'Sistema' : s.name,
                 style: const TextStyle(fontWeight: FontWeight.w600)),
           ),
-          const SizedBox(width: 8),
-          _tipoChip(tipoUnidad(s)),
-          if (s.afluente != null && s.afluente!.isNotEmpty) ...[
-            const SizedBox(width: 6),
-            _afluenteChip(s.afluente),
-          ],
+          if (ficha != null) ...[const SizedBox(width: 8), FichaClase(texto: ficha, clase: clase)],
           const SizedBox(width: 6),
           if (s.fromMaster)
             const Tooltip(message: 'Sistema del maestro', child: Icon(Icons.lock, size: 16, color: Colors.grey))
@@ -901,6 +989,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             _badge('adicional', const Color(0xFF566873)),
         ]),
       );
+  }
 
   // Chip del tipo (o "Sin Tipo").
   Widget _tipoChip(String? tipo) {
@@ -909,79 +998,80 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     return _badge(hasTipo ? tipo : 'Sin Tipo', c);
   }
 
-  // Bloque "Sistemas del centro" (maestro): checkbox por cada uno, nombre/tipo de solo lectura.
-  Widget _masterSistemasCard(List<Sistema> master) => Card(
-        margin: const EdgeInsets.only(bottom: 12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                const Text('Sistemas del centro', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                const SizedBox(width: 8),
-                _badge('maestro', const Color(0xFF566873)),
-              ]),
-              const Padding(
-                padding: EdgeInsets.only(top: 2, bottom: 6),
-                child: Text('Marca los que se evalúan. El nombre y el tipo solo se editan en el centro.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
-              ),
-              for (final m in master) _masterSistemaRow(m),
-            ],
-          ),
-        ),
-      );
+  // Bloque «Sistemas del centro» (maestro): agrupados por su tipo y en el orden de la lista lateral del editor de
+  // modelos, cada uno con la franja y el ícono de su tipo y su etapa (o el tipo de su agua) como ficha.
+  Widget _masterSistemasCard(List<Sistema> master) {
+    final grupos = _conEquipos ? sistemasPorClase(master) : [(clase: kClaseCultivo, sistemas: master)];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Padding(
+        padding: EdgeInsets.only(bottom: 2),
+        child: Text('Sistemas del centro', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+      ),
+      for (final g in grupos) ...[
+        if (_conEquipos) EncabezadoClase(clase: g.clase, cantidad: g.sistemas.length),
+        for (final m in g.sistemas) _masterSistemaRow(m),
+      ],
+      const SizedBox(height: 8),
+    ]);
+  }
 
   Widget _masterSistemaRow(Sistema m) {
     final current = _masterSalaFor(m);
     final included = current != null && !current.isDeleted;
-    final af = _afluenteSnapshot(m);
-    final sel = current == null ? 0 : current.puntosControl.where((p) => !p.isDeleted).length;
+    final clase = _conEquipos ? claseDe(m.clase) : null;
+    final estilo = estiloDe(clase);
+    final ficha = fichaSistema(m, conEquipos: _conEquipos);
     // Puntos marcados que el maestro ya no trae: se listan aparte para poder quitarlos.
     final fueraPts = current == null || current.isDeleted ? <PuntoControl>[] : puntosFueraDelMaestro(current, m.puntosControl);
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        Checkbox(
-          value: included,
-          visualDensity: VisualDensity.compact,
-          onChanged: _locked ? null : (v) => _toggleMaster(m, v ?? false),
-        ),
-        Icon(Icons.warehouse_outlined, size: 20, color: included ? const Color(0xFF2D58FF) : Colors.grey),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(m.nombre,
-              style: TextStyle(
-                  fontWeight: included ? FontWeight.w600 : FontWeight.w400,
-                  color: included ? null : const Color(0xFF8A93A2))),
-        ),
-        const SizedBox(width: 6),
-        // En un centro activado el sistema se rotula con su etapa («Smolt»); en V1, con su tipo.
-        _tipoChip(rotuloSistema(m, conEquipos: _conEquipos)),
-        if (af != null && af.isNotEmpty) ...[const SizedBox(width: 6), _afluenteChip(af)],
-        const SizedBox(width: 6),
-        _badge('$sel/${m.puntosControl.length + fueraPts.length}', included && sel > 0 ? const Color(0xFF2D58FF) : const Color(0xFF566873)),
-      ]),
-      if (included)
-        Padding(
-          padding: const EdgeInsets.only(left: 28, bottom: 6),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            ..._puntosMaestro(current, m.puntosControl),
-            if (fueraPts.isNotEmpty) ...[
-              _grupoTitulo('Fuera del modelo actual'),
-              for (final p in fueraPts) _fueraPuntoRow(p),
-            ],
-            for (final p in current.puntosControl.where((p) => !p.isDeleted && !p.fromMaster)) _adhocPuntoRow(current, p),
-            if (!_locked)
-              TextButton.icon(
-                onPressed: () => _addPuntoAdhoc(current),
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Agregar punto adicional'),
-                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 4), visualDensity: VisualDensity.compact),
-              ),
+    // Cuántos puntos del maestro están marcados (un punto con varias muestras cuenta una vez).
+    final sel = current == null || current.isDeleted
+        ? 0
+        : m.puntosControl.where((pd) => _puntoIncluido(current, pd)).length + fueraPts.length;
+    return ConFranja(
+      clase: clase,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 10, 4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Checkbox(
+              value: included,
+              onChanged: _locked ? null : (v) => _toggleMaster(m, v ?? false),
+            ),
+            Icon(estilo.icono, size: 20, color: included ? estilo.tinta : const Color(0xFF8A93A2)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(m.nombre,
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: included ? FontWeight.w700 : FontWeight.w500,
+                      color: included ? null : const Color(0xFF5A6474))),
+            ),
+            if (ficha != null) ...[const SizedBox(width: 6), FichaClase(texto: ficha, clase: clase)],
+            const SizedBox(width: 6),
+            _badge('$sel/${m.puntosControl.length + fueraPts.length}',
+                included && sel > 0 ? const Color(0xFF2D58FF) : const Color(0xFF566873)),
           ]),
-        ),
-    ]);
+          if (included)
+            Padding(
+              padding: const EdgeInsets.only(left: 12, bottom: 6),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                ..._puntosMaestro(current, m.puntosControl),
+                if (fueraPts.isNotEmpty) ...[
+                  _grupoTitulo('Fuera del modelo actual'),
+                  for (final p in fueraPts) _fueraPuntoRow(p),
+                ],
+                for (final p in current.puntosControl.where((p) => !p.isDeleted && !p.fromMaster)) _adhocPuntoRow(current, p),
+                if (!_locked)
+                  TextButton.icon(
+                    onPressed: () => _addPuntoAdhoc(current),
+                    icon: const Icon(Icons.add, size: 20),
+                    label: const Text('Agregar punto adicional'),
+                  ),
+              ]),
+            ),
+        ]),
+      ),
+    );
   }
 
   // Los puntos del maestro de un sistema para marcar. En el modelo plano, la lista tal cual (como
@@ -1005,9 +1095,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Widget _grupoTitulo(String titulo) => Padding(
-        padding: const EdgeInsets.only(top: 8, bottom: 2),
+        padding: const EdgeInsets.only(top: 10, bottom: 2),
         child: Text(titulo.toUpperCase(),
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.6, color: Color(0xFF556173))),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.6, color: Color(0xFF475569))),
       );
 
   // Título de un equipo dentro de «Equipos»: su alias y, si no lo dice ya, su tipo estándar.
@@ -1015,34 +1105,105 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     final tipo = b.equipoTipo?.trim() ?? '';
     final mostrarTipo = tipo.isNotEmpty && !(b.titulo ?? '').toLowerCase().contains(tipo.toLowerCase());
     return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 2),
+      padding: const EdgeInsets.only(top: 6, bottom: 2),
       child: Row(children: [
-        const Icon(Icons.settings_input_component_outlined, size: 15, color: Color(0xFF556173)),
+        const Icon(Icons.settings_input_component_outlined, size: 16, color: Color(0xFF475569)),
         const SizedBox(width: 6),
-        Flexible(child: Text(b.titulo ?? 'Equipo', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
+        Flexible(child: Text(b.titulo ?? 'Equipo', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700))),
         if (mostrarTipo) ...[const SizedBox(width: 6), _badge(tipo, const Color(0xFF566873))],
       ]),
     );
   }
 
+  // El nombre de un punto y, debajo y chico, su tipo (la regla vigente: «POST Manifold» con «Estanque Cabecera» debajo).
+  Widget _nombreConTipo(String nombre, String? tipo, {bool activo = true, double tamano = 14, FontWeight peso = FontWeight.w600}) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        Text(nombre, style: TextStyle(fontSize: tamano, fontWeight: peso, color: activo ? null : const Color(0xFF5A6474))),
+        if (tipo != null) Text(tipo, style: const TextStyle(fontSize: 12.5, color: Color(0xFF5A6474))),
+      ]);
+
   Widget _masterPuntoRow(AuditSala sala, PuntoControlDef pd) {
     final chk = _puntoIncluido(sala, pd);
     final equipo = equipoAMostrar(pd);
-    return Row(children: [
-      SizedBox(
-        width: 34, height: 34,
-        child: Checkbox(
+    final ng = pd.nivelPunto;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Checkbox(
           value: chk,
-          visualDensity: VisualDensity.compact,
           onChanged: _locked ? null : (v) => _togglePunto(sala, pd, v ?? false),
         ),
-      ),
-      Expanded(child: Text(pd.alias, style: TextStyle(fontSize: 13, color: chk ? null : const Color(0xFF8A93A2)))),
-      // En un tramo, el equipo por el que se nombra si el nombre no lo dice («POST UV» · «UV 2»).
-      if (equipo != null) ...[_badge(equipo, const Color(0xFF566873)), const SizedBox(width: 4)],
-      if (pd.tipo != null && pd.tipo!.isNotEmpty) _badge(pd.tipo!, const Color(0xFF2D58FF)),
+        Expanded(child: _nombreConTipo(pd.alias, tipoDebajoDef(pd), activo: chk)),
+        // En un tramo, el equipo por el que se nombra si el nombre no lo dice («POST UV» · «UV 2»).
+        if (equipo != null) ...[const SizedBox(width: 4), _badge(equipo, const Color(0xFF566873))],
+      ]),
+      if (ng != null && chk) _muestrasDeNivel(sala, pd, ng),
     ]);
   }
+
+  // Un punto de nivel de un grupo efímero: una fila por muestra de esta visita (cada una es un punto de la evaluación con
+  // su frasco, su evaluación y su posición por nivel) y «+ Otro rack».
+  Widget _muestrasDeNivel(AuditSala sala, PuntoControlDef pd, NivelPunto ng) {
+    final l = muestrasDe(sala, pd);
+    final nombreNivel = ng.nombreNivel(ng.nivel);
+    return Padding(
+      padding: const EdgeInsets.only(left: 40, bottom: 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        for (final p in l) _muestraNivel(p, ng, quitar: l.length > 1),
+        if (!_locked)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => _otraMuestra(sala, pd, ng),
+              icon: const Icon(Icons.add, size: 20),
+              label: Text('${femenino(nombreNivel) ? 'Otra' : 'Otro'} ${nombreNivel.toLowerCase()}'),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  // Una muestra de un punto de nivel: su frasco y su posición. La que ya subió se ve, pero se corrige en la web.
+  Widget _muestraNivel(PuntoControl p, NivelPunto ng, {required bool quitar}) {
+    final editable = !_locked && posicionEditable(p);
+    return Container(
+      key: ValueKey('muestra-${p.id}'),
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F9FC),
+        border: Border.all(color: const Color(0xFFDDE3EE)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Text('Frasco ${p.correlativo != null ? 'N° ${p.correlativo}' : '—'}',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF475569))),
+          const Spacer(),
+          if (!_locked && quitar)
+            IconButton(
+              tooltip: 'Quitar esta muestra',
+              icon: const Icon(Icons.close, color: Colors.red),
+              onPressed: () => _quitarMuestra(p),
+            ),
+        ]),
+        if (editable)
+          NivelesMuestraEditor(
+            key: ValueKey('niveles-${p.id}'),
+            punto: ng,
+            value: p.nivelesMuestra,
+            reuso: _audit == null ? null : reusoDelDocumento(_audit!.document, ng.grupoId, excepto: p),
+            onChanged: (n) => _cambiarNiveles(p, ng, n),
+          )
+        else
+          _posicionSoloLectura(p),
+      ]),
+    );
+  }
+
+  Widget _posicionSoloLectura(PuntoControl p) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(etiquetaNiveles(p) ?? 'Sin posición', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+        if (!_locked) const Text('Se corrige en la web', style: TextStyle(fontSize: 12.5, color: Color(0xFF5A6474))),
+      ]);
 
   // Un punto marcado que el maestro ya no trae (retirado o del modelo anterior): se ve marcado y se
   // puede desmarcar (queda en la papelera, como al desmarcar cualquier punto del maestro).
@@ -1098,11 +1259,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Sistemas adicionales', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               const Padding(
-                padding: EdgeInsets.only(top: 2, bottom: 10),
-                child: Text('Sistemas que no están en el centro. Estos sí puedes renombrar y retipar.',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF556173))),
+                padding: EdgeInsets.only(bottom: 10),
+                child: Text('Sistemas adicionales', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               ),
               // Formulario de alta.
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1189,20 +1348,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _rpnTab(Audit a) {
     if (a.centerId == null) return _needCenterNotice();
     final d = a.document;
-    final sistemas = d.salas.where((s) => !s.isDeleted).toList();
+    final sistemas = _salasOrdenadas(a);
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        _seccionAplicada('la evaluación de terreno (RPN)', d.aplicaRpn, (v) => _aplicarSeccion((x) => d.rpnDesactivado = x, v),
-            'Es el caso típico cuando el cliente toma las muestras y las trae: sin visita no hay O, L, I ni D. El informe '
-            'sale sin matriz de riesgo ni índice, y con los resultados de BQ y FC igual que siempre.'),
-        if (!d.aplicaRpn)
-          _infoCard('La evaluación de terreno está marcada como no aplicada.'
-              '${d.aplicaLab ? ' Los frascos y el BQ/FC se anotan en la pestaña Muestreo.' : ''}')
-        else ...[
-          if (sistemas.isEmpty)
-            _infoCard('Define los sistemas en la pestaña Sistemas para inspeccionar sus puntos de control.'),
-          for (final sistema in sistemas) _sistemaRpnCard(sistema),
+        _seccionAplicada('la evaluación de terreno (RPN)', d.aplicaRpn, (v) => _aplicarSeccion((x) => d.rpnDesactivado = x, v)),
+        if (d.aplicaRpn) ...[
+          if (sistemas.isEmpty) _infoCard('Marca los sistemas y sus puntos en la pestaña Sistemas.'),
+          ..._porClase(sistemas, _sistemaRpnCard),
         ],
         const SizedBox(height: 40),
       ],
@@ -1214,20 +1367,15 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   Widget _muestreoTab(Audit a) {
     if (a.centerId == null) return _needCenterNotice();
     final d = a.document;
-    final sistemas = d.salas.where((s) => !s.isDeleted).toList();
+    final sistemas = _salasOrdenadas(a);
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        _seccionAplicada('el laboratorio (BQ/FC)', d.aplicaLab, (v) => _aplicarSeccion((x) => d.labDesactivado = x, v),
-            'Evaluación solo RPN: esta visita no lleva laboratorio, o no se tomaron muestras. El informe sale sin la tabla '
-            'BactiQuant ni los gráficos, con el índice RPN sin CM.'),
-        if (!d.aplicaLab)
-          _infoCard('El laboratorio está marcado como no aplicado: el informe mostrará solo el RPN. Vuelve a activarlo '
-              'arriba si sí se tomaron muestras.')
-        else ...[
+        _seccionAplicada('el laboratorio (BQ/FC)', d.aplicaLab, (v) => _aplicarSeccion((x) => d.labDesactivado = x, v)),
+        if (d.aplicaLab) ...[
           _rotuloCard(a),
-          if (sistemas.isEmpty) _infoCard('Define los sistemas y marca sus puntos en la pestaña Sistemas.'),
-          for (final sistema in sistemas) _sistemaMuestreoCard(sistema),
+          if (sistemas.isEmpty) _infoCard('Marca los sistemas y sus puntos en la pestaña Sistemas.'),
+          ..._porClase(sistemas, _sistemaMuestreoCard),
         ],
         const SizedBox(height: 40),
       ],
@@ -1243,17 +1391,15 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         title: Text(folio == null
             ? 'Escribe el folio en Identificación antes de rotular los frascos.'
             : 'Folio $folio · cada frasco se rotula «$folio-N°»'),
-        subtitle: const Text('El N° es el correlativo del punto, único en la evaluación: con él se asocia el CSV del '
-            'Bactiquant. Si mides el BQ o el FC en terreno, anótalo aquí; si no, se carga en la web.'),
       ),
     );
   }
 
   Widget _sistemaMuestreoCard(AuditSala sistema) {
-    final puntos = sistema.puntosControl.where((p) => !p.isDeleted).toList();
-    return Card(
+    final puntos = _puntosOrdenados(sistema);
+    return ConFranja(
+      clase: _claseSala(sistema),
       margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1262,16 +1408,18 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           if (puntos.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text('Sin puntos de control aún (se marcan en la pestaña Sistemas).',
-                  style: TextStyle(color: Colors.grey)),
+              child: Text('Sin puntos marcados.', style: TextStyle(color: Color(0xFF5A6474))),
             ),
-          for (final p in puntos) _puntoMuestreoRow(p),
+          for (final p in puntos) _puntoMuestreoRow(sistema, p),
         ]),
       ),
     );
   }
 
-  Widget _puntoMuestreoRow(PuntoControl p) => Container(
+  Widget _puntoMuestreoRow(AuditSala sala, PuntoControl p) {
+    final ng = _nivelDe(sala, p);
+    return Container(
+        key: ValueKey('mu-${p.id}'),
         margin: const EdgeInsets.only(top: 8),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
@@ -1282,10 +1430,22 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             _correlativoCampo(p, 'mc'),
-            Expanded(
-              child: Text(_nombrePunto(p), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-            ),
+            Expanded(child: _nombreConTipo(nombrePunto(p, conPosicion: ng == null), tipoDebajoPunto(p), tamano: 14)),
           ]),
+          // Un punto de nivel: su posición, aquí mismo (es donde se rotula el frasco).
+          if (ng != null) ...[
+            const SizedBox(height: 8),
+            if (!_locked && posicionEditable(p))
+              NivelesMuestraEditor(
+                key: ValueKey('mu-niveles-${p.id}'),
+                punto: ng,
+                value: p.nivelesMuestra,
+                reuso: _audit == null ? null : reusoDelDocumento(_audit!.document, ng.grupoId, excepto: p),
+                onChanged: (n) => _cambiarNiveles(p, ng, n),
+              )
+            else
+              _posicionSoloLectura(p),
+          ],
           const SizedBox(height: 8),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Expanded(child: _labCampo(p, hongos: false)),
@@ -1294,12 +1454,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           ]),
         ]),
       );
-
-  // Nombre del punto con su posición, si la web anotó una (bateas / baldes: «Rack 3 · Batea 7»).
-  String _nombrePunto(PuntoControl p) {
-    final nombre = p.nombre.trim().isEmpty ? 'Punto sin nombre' : p.nombre.trim();
-    final pos = p.posicionEtiqueta;
-    return pos == null ? nombre : '$nombre · $pos';
   }
 
   // El N° del frasco (correlativo): campo editable o, cerrada, el número. Repetido en la evaluación = marcado.
@@ -1363,7 +1517,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
       decoration: _dec().copyWith(
         labelText: '$sigla value',
         hintText: 'ej. 1.234,5',
-        helperText: valor == null ? 'Opcional' : '= ${formatoNumero(valor)} · a mano',
+        helperText: valor == null ? null : '= ${formatoNumero(valor)} · a mano',
       ),
       onChanged: (t) => _setLab(p, hongos, t),
     );
@@ -1407,20 +1561,19 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   // Título de un sistema (nombre + chip de tipo + candado si viene del maestro). El chip es la etapa
   // con su etiqueta si la auditoría la guardó (centro activado); si no, el tipo de siempre.
   Widget _sistemaTitle(AuditSala sistema) {
-    final tipo = tipoUnidad(sistema);
-    final hasTipo = tipo != null && tipo.isNotEmpty;
+    final clase = _claseSala(sistema);
+    final estilo = estiloDe(clase);
+    final ficha = fichaSala(sistema, _masterSistemas, conEquipos: _conEquipos);
     return Row(children: [
+      Icon(estilo.icono, size: 20, color: estilo.tinta),
+      const SizedBox(width: 6),
       Flexible(
         child: Text(sistema.name.isEmpty ? 'Sistema' : sistema.name,
-            style: const TextStyle(fontWeight: FontWeight.w700)),
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
       ),
-      if (hasTipo) ...[
+      if (ficha != null && ficha.isNotEmpty) ...[
         const SizedBox(width: 8),
-        _badge(tipo, const Color(0xFF2D58FF)),
-      ],
-      if (sistema.afluente != null && sistema.afluente!.isNotEmpty) ...[
-        const SizedBox(width: 6),
-        _afluenteChip(sistema.afluente),
+        FichaClase(texto: ficha, clase: clase),
       ],
       if (sistema.fromMaster) ...[
         const SizedBox(width: 6),
@@ -1430,19 +1583,14 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
   }
 
   Widget _sistemaRpnCard(AuditSala sistema) {
-    final c = _badgeColor('IN-01');
-    final puntos = sistema.puntosControl.where((x) => !x.isDeleted).toList();
-    return Card(
+    final puntos = _puntosOrdenados(sistema);
+    return ConFranja(
+      clase: _claseSala(sistema),
       margin: const EdgeInsets.only(bottom: 12),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Container(
-        decoration: BoxDecoration(border: Border(left: BorderSide(color: c, width: 4))),
-        child: Theme(
+      child: Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
             initiallyExpanded: true,
-            leading: const Icon(Icons.warehouse_outlined),
             title: _sistemaTitle(sistema),
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             children: [
@@ -1462,7 +1610,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             ],
           ),
         ),
-      ),
     );
   }
 
@@ -1477,40 +1624,20 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Encabezado del punto: equipo (si la foto lo trae y el nombre no lo dice: «POST UV» ·
-            // «UV 2»), chip de tipo (si tiene) + candado si viene del maestro.
-            if ((p.tipo != null && p.tipo!.isNotEmpty) || p.fromMaster || equipoDelPunto(p) != null ||
-                p.posicionEtiqueta != null) ...[
-              Row(children: [
-                if (p.posicionEtiqueta case final pos?) ...[
-                  _badge(pos, const Color(0xFF0E7490)),
-                  const SizedBox(width: 6),
-                ],
-                if (equipoDelPunto(p) case final equipo?) ...[
-                  _badge(equipo, const Color(0xFF566873)),
-                  const SizedBox(width: 6),
-                ],
-                if (p.tipo != null && p.tipo!.isNotEmpty) _badge(p.tipo!, const Color(0xFF2D58FF)),
-                if (p.fromMaster) ...[
-                  const SizedBox(width: 6),
-                  const Tooltip(
-                      message: 'Punto del maestro (nombre y tipo fijos)',
-                      child: Icon(Icons.lock, size: 15, color: Colors.grey)),
-                ],
-              ]),
-              const SizedBox(height: 6),
-            ],
             Row(children: [
               // El N° del frasco, solo si la visita lleva laboratorio (se rotula {folio}-{N°}).
               if (_audit?.document.aplicaLab ?? true) _correlativoCampo(p, 'pc'),
+              // Un punto del maestro se nombra como en la web («POST UV · UV 2», «… — Rack 17 (final)») con su tipo
+              // debajo; uno adicional se escribe aquí.
               Expanded(
-                child: TextFormField(
-                  key: ValueKey('pn-${p.id}'),
-                  initialValue: p.nombre,
-                  readOnly: _locked || p.fromMaster,
-                  decoration: _dec().copyWith(hintText: 'Punto de muestreo (equipo / componente)'),
-                  onChanged: (v) { p.nombre = v; _scheduleSave(); },
-                ),
+                child: p.fromMaster || _locked
+                    ? _nombreConTipo(nombrePunto(p), tipoDebajoPunto(p), tamano: 14.5, peso: FontWeight.w700)
+                    : TextFormField(
+                        key: ValueKey('pn-${p.id}'),
+                        initialValue: p.nombre,
+                        decoration: _dec().copyWith(hintText: 'Punto de muestreo (equipo / componente)'),
+                        onChanged: (v) { p.nombre = v; _scheduleSave(); },
+                      ),
               ),
               if (!_locked)
                 IconButton(
@@ -1594,16 +1721,10 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
               ]),
             )
           else if (!_locked)
-            Wrap(spacing: 8, children: [
-              OutlinedButton.icon(
-                  onPressed: _recPunto == null ? () => _startRec(p) : null,
-                  icon: const Icon(Icons.mic, size: 18),
-                  label: const Text('Audio')),
-              OutlinedButton.icon(
-                  onPressed: _testMic,
-                  icon: const Icon(Icons.graphic_eq, size: 18),
-                  label: const Text('Probar micrófono')),
-            ]),
+            OutlinedButton.icon(
+                onPressed: _recPunto == null ? () => _startRec(p) : null,
+                icon: const Icon(Icons.mic, size: 18),
+                label: const Text('Audio')),
           for (final ev in p.audios.where((a) => !a.isDeleted)) _audioItem(p, ev),
         ],
       ),
@@ -1632,23 +1753,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         if (!ev.uploaded) const Icon(Icons.cloud_upload_outlined, size: 16, color: Color(0xFFE0A030)),
         if (!_locked)
           IconButton(
-              icon: const Icon(Icons.auto_awesome, size: 20, color: Color(0xFF7C4DFF)),
-              tooltip: 'Transcribir con IA',
-              onPressed: () => _transcribirIA(p, ev)),
-        if (!_locked)
-          IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.red),
               onPressed: () => _removeAudio(p, ev)),
       ]),
-    );
-  }
-
-  /// Transcripción del audio con IA (Claude). Aún no conectada: deja el texto
-  /// preparado para compilarse en el comentario del punto cuando se habilite Fase 6.
-  Future<void> _transcribirIA(PuntoControl p, Evidencia ev) async {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Transcripción con IA: disponible próximamente')),
     );
   }
 
@@ -1692,18 +1799,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     _recTimer?.cancel();
     await _media.cancelRecording();
     if (mounted) setState(() => _recPunto = null);
-  }
-
-  Future<void> _testMic() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Probando micrófono…'), duration: Duration(milliseconds: 2300)));
-    final r = await _media.testMic();
-    if (!mounted) return;
-    final msg = r == null
-        ? 'Sin permiso de micrófono.'
-        : (r ? '✓ Micrófono OK, se detectó señal.' : '⚠ No se detectó señal. Revisa el micrófono.');
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), backgroundColor: r == true ? Colors.green : Colors.orange));
   }
 
   Future<void> _playAudio(Evidencia ev) async {
@@ -1882,14 +1977,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
           children: [
             for (final ev in delFotos) _trashItem(ev, isFoto: true),
             for (final ev in delAudios) _trashItem(ev, isFoto: false),
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('La papelera se vacía al finalizar la evaluación.',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF8A93A2), fontStyle: FontStyle.italic)),
-              ),
-            ),
           ],
         ),
       ),
@@ -1953,7 +2040,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.3, color: Color(0xFF000E3F))),
           ),
           for (var i = 0; i < _dims.length; i++) _dimRow(p, i),
-          _legend(),
         ],
       );
 
@@ -2010,32 +2096,6 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
     );
   }
 
-  Widget _legend() => Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(bottom: 8),
-          title: const Text('¿Qué significa cada escala?',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF2D58FF))),
-          children: [
-            for (final d in _dims)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(d['sub'] == null ? '${d['l']} — ${d['n']}' : '${d['l']} — ${d['n']} (${d['sub']})',
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: Color(0xFF000E3F))),
-                    const SizedBox(height: 2),
-                    Text([for (var i = 0; i < 5; i++) '${i + 1}: ${(d['e'] as List)[i]}'].join(' · '),
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF556173), height: 1.35)),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      );
-
   Color _riskColor(int v) => switch (v) {
         1 => const Color(0xFF2E7D32),
         2 => const Color(0xFF7CB342),
@@ -2062,7 +2122,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
 
   Future<void> _confirmFinalize() async {
     final a = _audit;
-    if (a == null) return;
+    if (a == null || a.compartida) return;
     final d = a.document;
     // La regla de la web (y del servidor al finalizar allá): sin RPN ni laboratorio no hay nada que informar.
     final nada = validarSecciones(d);
@@ -2092,6 +2152,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
                 p.estadoOperacional == null || p.limpiezaBiofilm == null || p.impactoPeces == null || p.detectabilidad == null)
             .length
         : 0;
+    final sinPos = sinPosicion(d, _masterSistemas);
     final pendientes = [
       if (puntos.isEmpty) 'La evaluación no tiene puntos de control marcados.',
       if (sinFolio) 'La evaluación no tiene folio: el CSV de Bactiquant no podrá asociarse.',
@@ -2099,6 +2160,9 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
         'Hay correlativos repetidos (${repetidos.join(', ')}): el resultado no sabría a qué punto aplicarse.',
       if (sinFrasco > 0) '$sinFrasco punto(s) sin N° de frasco: su resultado no se podrá asociar.',
       if (sinEvaluar > 0) '$sinEvaluar punto(s) sin evaluar completo (O, L, I, D).',
+      if (sinPos.isNotEmpty)
+        '${sinPos.length} muestra(s) sin la posición de cada nivel: '
+            '${sinPos.take(4).map((x) => nombrePunto(x.punto)).join(', ')}${sinPos.length > 4 ? '…' : ''}. Se puede completar en la web.',
       if (!d.aplicaEntrevista) 'La entrevista queda como no aplicada.',
       if (!d.aplicaRpn) 'La evaluación de terreno (RPN) queda como no aplicada.',
       if (!d.aplicaLab) 'El laboratorio (BQ/FC) queda como no aplicado.',
@@ -2188,7 +2252,7 @@ class _AuditEditScreenState extends State<AuditEditScreen> with SingleTickerProv
             shape: const Border(),
             collapsedShape: const Border(),
             title: Row(children: [
-              _badge('IDENTIFICACIÓN', idc),
+              Flexible(child: _badge('IDENTIFICACIÓN', idc)),
               const Spacer(),
               if (_locked) ...[
                   if (a.folio != null) _badge('Folio ${a.folio}', const Color(0xFF2D58FF)),
