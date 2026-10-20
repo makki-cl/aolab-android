@@ -64,6 +64,27 @@ flutter test        # no necesita dispositivo ni emulador
 - `test/maestro_test.dart`: lee el maestro nuevo (centros con el modelo con equipos), el de un
   servidor anterior y uno de un servidor más nuevo; agrupa los puntos sin perder ninguno. Usa JSON
   real del servidor en `test/fixtures/`.
+- `test/niveles_test.dart`: la posición por nivel de los grupos efímeros con los mismos casos de la
+  web (código del miembro, posición obligatoria, etiqueta, reutilización en la evaluación).
+- `test/modelo_hoy_test.dart`, `test/editor_test.dart`: puntos de nivel, varias muestras y «+ Otro
+  rack», nombres con el tipo debajo, sistemas por tipo como la lista lateral del editor y las
+  evaluaciones compartidas (se finalizan en la web).
+- `test/sesion_test.dart`, `test/pantallas_test.dart`: entrar con clave, Google o Microsoft (los
+  botones que ofrece el servidor), errores en español, sesión vencida y cambio de usuario.
+
+Prueba de contrato contra un servidor **local** (una copia; nunca prod ni TEST). No corre en el CI:
+
+```bash
+AOLAB_CONTRATO_URL=http://127.0.0.1:<puerto> AOLAB_CONTRATO_CORREO=… AOLAB_CONTRATO_CLAVE=… \
+  flutter test integration_local/contrato_test.dart
+```
+
+## Compilar (CI)
+
+El repo no versiona la carpeta `android/`: el CI la genera con `flutter create` y la ajusta con
+`bash tool/configurar_android.sh <applicationId> "<nombre>"` (paquete, permisos y el retorno de
+«Entrar con Microsoft», que recibe AppAuth). Lo usan `build-apk.yml` (canal de prueba),
+`verificar.yml` (compila un APK de depuración sin publicar) y el build de producción.
 
 ### ¿A qué URL apunta?
 Configurable por `--dart-define=AOLAB_API_BASE_URL=...` (ver `lib/config.dart`).
