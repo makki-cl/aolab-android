@@ -55,6 +55,9 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^5.0.0
   flutter_launcher_icons: ^0.14.3
+  # SQLite de verdad en el PC para la prueba de punta a punta (integration_local/, fuera del CI). Se queda en 2.3.x:
+  # la 2.4 trae sqlite3 3.x, que compila SQLite con build hooks, y eso no tiene por qué entrar al build de Android.
+  sqflite_common_ffi: ">=2.3.7 <2.4.0"
 
 # Sin pubspec.lock commiteado, el CI resuelve dependencias frescas en cada build y una
 # publicación nueva puede romperlo sin que cambie nuestro código. jni 1.0.1 (27-07-2026)

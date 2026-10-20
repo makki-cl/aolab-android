@@ -72,12 +72,24 @@ flutter test        # no necesita dispositivo ni emulador
 - `test/sesion_test.dart`, `test/pantallas_test.dart`: entrar con clave, Google o Microsoft (los
   botones que ofrece el servidor), errores en español, sesión vencida y cambio de usuario.
 
-Prueba de contrato contra un servidor **local** (una copia; nunca prod ni TEST). No corre en el CI:
+Las de `test/` corren en el CI: en cada rama de trabajo (`verificar.yml`), antes de publicar el APK de Test
+(`build-apk.yml`) y antes de publicar el de producción (`aolab-android-prod`).
+
+Contra un servidor **local** (una copia de la base; nunca prod ni TEST) hay dos más, que no corren en el CI:
 
 ```bash
-AOLAB_CONTRATO_URL=http://127.0.0.1:<puerto> AOLAB_CONTRATO_CORREO=… AOLAB_CONTRATO_CLAVE=… \
-  flutter test integration_local/contrato_test.dart
+export AOLAB_CONTRATO_URL=http://127.0.0.1:<puerto> AOLAB_CONTRATO_CORREO=… AOLAB_CONTRATO_CLAVE=…
+flutter test integration_local/contrato_test.dart      # lo que manda el servidor, la app lo lee sin perder nada
+AOLAB_E2E_FOLIO=<folio> flutter test integration_local/punta_a_punta_test.dart
 ```
+
+- `punta_a_punta_test.dart`: los servicios de la app como en la tablet (SQLite de verdad con `sqflite_common_ffi`, Dio
+  contra el servidor) y la señal simulada: entrar con clave, bajar todo, anotar otra muestra con posición de rack, RPN y
+  foto sin señal, mientras la oficina edita; subir con una señal que no alcanza para la foto y después con señal. Revisa
+  que no se pierda nada de los dos lados, que el interruptor de la tablet se aplique, que dos muestras del mismo punto no
+  se junten, que otro usuario no pueda entrar con algo pendiente, que la posición subida no se cambie desde la tablet y
+  que una evaluación compartida no se finalice desde la app. **Escribe en esa copia** (edita la evaluación del folio).
+- En el PC se necesita `libsqlite3` (en Debian/Ubuntu ya viene `libsqlite3.so.0`).
 
 ## Compilar (CI)
 
