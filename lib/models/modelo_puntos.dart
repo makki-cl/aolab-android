@@ -406,3 +406,59 @@ String? fichaSala(AuditSala s, List<Sistema> maestro, {required bool conEquipos}
   if (m != null) return fichaSistema(m, conEquipos: conEquipos);
   return tipoUnidad(s);
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Las muestras de un sistema agrupadas como la lista del maestro (RPN y Muestreo)
+// ════════════════════════════════════════════════════════════════════════
+
+/// Un bloque de muestras: las de un equipo (con su alias como título) o, en las demás secciones, todas juntas.
+class BloqueMuestras {
+  final String? titulo;
+  final String? equipoTipo;
+  final List<PuntoControl> puntos;
+
+  BloqueMuestras({this.titulo, this.equipoTipo, required this.puntos});
+}
+
+/// Una sección de muestras con su título («Afluentes», «Equipos», «Tramos (PRE / POST)», «Efluente», y al final «Fuera
+/// del modelo actual» y «Puntos adicionales»). Sin título en el modelo plano.
+class SeccionMuestras {
+  final String? titulo;
+  final List<BloqueMuestras> bloques;
+
+  SeccionMuestras({this.titulo, required this.bloques});
+
+  Iterable<PuntoControl> get puntos => bloques.expand((b) => b.puntos);
+}
+
+/// Las muestras vigentes de un sistema de la evaluación agrupadas igual que sus puntos en la pestaña Sistemas (grupo ›
+/// equipo › muestra), en el orden del agua; las varias muestras de un punto de nivel, juntas y en el orden en que se
+/// anotaron. Las que el maestro ya no trae y las adicionales van al final, cada una en su sección. Nunca pierde una.
+List<SeccionMuestras> agruparMuestras(List<PuntoControl> puntos, Sistema? m) {
+  if (m == null) return puntos.isEmpty ? [] : [SeccionMuestras(bloques: [BloqueMuestras(puntos: puntos)])];
+  final usados = <PuntoControl>{};
+  List<PuntoControl> de(PuntoControlDef pd) {
+    final l = [for (final p in puntos) if (p.fromMaster && !usados.contains(p) && esMismoPunto(p, pd)) p];
+    usados.addAll(l);
+    return l;
+  }
+
+  final secciones = <SeccionMuestras>[];
+  for (final sec in agruparPuntos(m.puntosControl)) {
+    final bloques = <BloqueMuestras>[];
+    for (final b in sec.bloques) {
+      final l = [for (final pd in b.puntos) ...de(pd)];
+      if (l.isNotEmpty) bloques.add(BloqueMuestras(titulo: b.titulo, equipoTipo: b.equipoTipo, puntos: l));
+    }
+    if (bloques.isNotEmpty) secciones.add(SeccionMuestras(titulo: sec.grupo == null ? null : sec.titulo, bloques: bloques));
+  }
+  final fuera = [for (final p in puntos) if (p.fromMaster && !usados.contains(p)) p];
+  final adicionales = [for (final p in puntos) if (!p.fromMaster) p];
+  if (fuera.isNotEmpty) {
+    secciones.add(SeccionMuestras(titulo: 'Fuera del modelo actual', bloques: [BloqueMuestras(puntos: fuera)]));
+  }
+  if (adicionales.isNotEmpty) {
+    secciones.add(SeccionMuestras(titulo: secciones.isNotEmpty ? 'Puntos adicionales' : null, bloques: [BloqueMuestras(puntos: adicionales)]));
+  }
+  return secciones;
+}

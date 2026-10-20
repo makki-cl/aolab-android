@@ -19,14 +19,24 @@ class TemplateService extends ChangeNotifier {
 
   bool get isLoaded => template != null;
 
+  /// La caché y después la red (para quien necesita la plantilla al día antes de seguir).
   Future<void> load() async {
-    // 1) caché local (offline-first)
+    await cargarLocal();
+    await refrescar();
+  }
+
+  /// Solo la caché local: es al tiro y no depende de la señal.
+  Future<void> cargarLocal() async {
     final cached = await db.getValue('template');
-    if (cached != null) {
+    if (cached == null) return;
+    try {
       template = QuestionnaireTemplate.fromJson(jsonDecode(cached) as Map<String, dynamic>);
       notifyListeners();
-    }
-    // 2) refresco desde la red (si se puede)
+    } catch (_) {/* una caché ilegible se reemplaza en el próximo refresco */}
+  }
+
+  /// La plantilla del servidor, si hay red. Sin señal se queda la de la caché.
+  Future<void> refrescar() async {
     try {
       final res = await api.dio.get('/api/questionnaire/template');
       template = QuestionnaireTemplate.fromJson(res.data as Map<String, dynamic>);
@@ -34,6 +44,8 @@ class TemplateService extends ChangeNotifier {
       notifyListeners();
     } on DioException {
       // sin red: nos quedamos con la caché si existe
+    } catch (_) {
+      // una respuesta que no se entiende tampoco borra la caché
     }
   }
 }

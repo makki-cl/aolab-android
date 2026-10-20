@@ -13,6 +13,7 @@ import 'package:aolab_android/models/master.dart';
 import 'package:aolab_android/models/modelo_puntos.dart';
 import 'package:aolab_android/models/niveles.dart';
 import 'package:aolab_android/services/auth_service.dart';
+import 'package:aolab_android/services/media_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -187,6 +188,24 @@ void main() {
       a.isDeleted = true;
       a.updatedAtUtc = DateTime.now().toUtc();
       await dio.post('/api/audits/push', data: {'audits': [a.toDto()]});
+    }
+  }, skip: omitir);
+
+  test('una foto tomada sin señal queda en la tablet y la sincronización la sube después', () async {
+    final carpeta = Directory.systemTemp.createTempSync('contrato-evidencias');
+    final media = MediaService(api: auth.api, carpeta: carpeta.path)..pausaEntreIntentos = Duration.zero;
+    final origen = File('${carpeta.path}/origen.jpg')..writeAsBytesSync(List<int>.generate(2048, (i) => i % 251));
+    final ev = await media.guardarFoto(origen.path);
+    expect(ev.uploaded, isFalse);
+    expect(media.hasLocal(ev.id), isTrue);
+    try {
+      expect(await media.uploadPending([ev]), {ev.id});
+      expect(ev.uploaded, isTrue);
+      final r = await dio.get<List<int>>('/api/evidencias/${ev.id}', options: Options(responseType: ResponseType.bytes));
+      expect(r.data, origen.readAsBytesSync());
+    } finally {
+      await media.removeRemote(ev.id);
+      carpeta.deleteSync(recursive: true);
     }
   }, skip: omitir);
 }

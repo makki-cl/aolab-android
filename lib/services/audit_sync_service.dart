@@ -12,6 +12,11 @@ import 'media_service.dart';
 
 enum SyncStatus { idle, syncing, offline, error }
 
+/// Una foto o un audio no alcanzó a subir por la señal (quedan en la tablet).
+class SinSenal implements Exception {
+  const SinSenal();
+}
+
 /// Sincroniza las evaluaciones offline-first: sube las evidencias pendientes, hace PUSH de las locales con cambios
 /// (dirty) y PULL de los cambios del servidor por cursor. También refresca los maestros (clientes/centros) en el mismo
 /// ciclo.
@@ -142,11 +147,13 @@ class AuditSyncService extends ChangeNotifier {
   /// mientras tanto). La fila queda pendiente para que el push lleve el dato.
   Future<void> _uploadMedia() async {
     final audits = await db.visibleAudits();
+    media.sinRed = false;
     for (final a in audits) {
       final pendientes = evidenciasDe(a.document).where((e) => !e.uploaded && !e.isDeleted).toList();
       if (pendientes.isEmpty) continue;
       final subidas = await media.uploadPending(pendientes);
       await db.marcarEvidenciasSubidas(a.id, subidas);
+      if (media.sinRed) throw const SinSenal();
     }
   }
 
@@ -221,6 +228,7 @@ class AuditSyncService extends ChangeNotifier {
 
   /// El error de un paso de la sincronización en palabras del evaluador (sin el texto de la librería de red).
   static String mensajeDeSync(String paso, Object e) {
+    if (e is SinSenal) return '$paso: la señal no alcanzó para subirlos. Quedan en la tablet y se suben en la próxima sincronización.';
     if (e is DioException) {
       final code = e.response?.statusCode;
       if (code == 403) return 'Tu cuenta no tiene acceso a la sincronización: la app es para el personal de AOLAB.';
