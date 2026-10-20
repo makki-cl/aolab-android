@@ -39,6 +39,17 @@ class MediaService {
 
   bool hasLocal(String id) => _dirPath != null && fileFor(id).existsSync();
 
+  /// Borra los archivos locales de evidencias (al cambiar de usuario, cuando ya todo subió).
+  Future<void> borrarArchivosLocales() async {
+    final d = Directory(await dirPath());
+    if (!await d.exists()) return;
+    await for (final f in d.list()) {
+      try {
+        await f.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
   /// Captura una foto (cámara o galería), la guarda local y crea la Evidencia.
   /// Intenta subirla; si no hay red, queda pendiente (se sube en el sync).
   Future<Evidencia?> capturePhoto({required ImageSource source}) async {

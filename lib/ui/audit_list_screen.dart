@@ -9,6 +9,7 @@ import '../services/audit_sync_service.dart';
 import '../services/auth_service.dart';
 import '../services/template_service.dart';
 import 'audit_edit_screen.dart';
+import 'login_screen.dart';
 
 class AuditListScreen extends StatefulWidget {
   const AuditListScreen({super.key});
@@ -70,6 +71,43 @@ class _AuditListScreenState extends State<AuditListScreen> {
     await _reload();
   }
 
+  /// La sesión venció: se vuelve a entrar (con la misma cuenta) y se sincroniza. Nada local se pierde.
+  Future<void> _reingresar() async {
+    final ok = await Navigator.of(context).push<bool>(MaterialPageRoute(builder: (_) => const LoginScreen(reingreso: true)));
+    if (ok == true && mounted) _sync();
+  }
+
+  /// Cerrar sesión no borra nada de la tablet, pero lo que falta subir queda esperando a que vuelva a entrar la misma
+  /// persona: se avisa y se ofrece sincronizar antes.
+  Future<void> _cerrarSesion() async {
+    final auth = context.read<AuthService>();
+    final db = context.read<AppDatabase>();
+    final pendientes = await db.pendientesDeSubir();
+    if (!mounted) return;
+    final r = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cerrar sesión'),
+        content: Text(pendientes == 0
+            ? '¿Cerrar la sesión de ${auth.email ?? 'esta cuenta'}?'
+            : 'Hay ${pendientes == 1 ? '1 evaluación' : '$pendientes evaluaciones'} sin subir. Quedan guardadas en la tablet, '
+                'pero solo se suben cuando vuelvas a entrar con ${auth.email ?? 'esta cuenta'}.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          if (pendientes > 0 && !auth.sesionVencida)
+            TextButton(onPressed: () => Navigator.pop(ctx, 'sync'), child: const Text('Sincronizar primero')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, 'salir'), child: const Text('Cerrar sesión')),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (r == 'sync') {
+      await _sync();
+    } else if (r == 'salir') {
+      await auth.logout();
+    }
+  }
+
   Future<void> _create() async {
     final db = context.read<AppDatabase>();
     final now = DateTime.now().toUtc();
@@ -107,10 +145,22 @@ class _AuditListScreenState extends State<AuditListScreen> {
                 ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.sync),
           ),
-          IconButton(
-            tooltip: 'Cerrar sesión',
-            onPressed: () => context.read<AuthService>().logout(),
-            icon: const Icon(Icons.logout),
+          // Cerrar sesión va en el menú, con confirmación: en terreno no se cierra por error.
+          PopupMenuButton<String>(
+            tooltip: 'Más opciones',
+            onSelected: (v) {
+              if (v == 'salir') _cerrarSesion();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem<String>(
+                enabled: false,
+                child: Text(context.read<AuthService>().email ?? '', style: const TextStyle(fontSize: 13)),
+              ),
+              const PopupMenuItem<String>(
+                value: 'salir',
+                child: Row(children: [Icon(Icons.logout, size: 20), SizedBox(width: 10), Text('Cerrar sesión')]),
+              ),
+            ],
           ),
         ],
         bottom: PreferredSize(
@@ -138,11 +188,28 @@ class _AuditListScreenState extends State<AuditListScreen> {
                     ]),
                   ),
                 ),
+              if (context.watch<AuthService>().sesionVencida) _avisoVencida(),
               if (sync.avisos.isNotEmpty) _avisos(sync),
               Expanded(child: _body()),
             ]),
     );
   }
+
+  Widget _avisoVencida() => Material(
+        color: const Color(0xFFFFF4E5),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+          child: Row(children: [
+            const Icon(Icons.lock_clock, color: Color(0xFFB7791F), size: 22),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('Tu sesión venció. Lo anotado sigue en la tablet; entra de nuevo para sincronizar.',
+                  style: TextStyle(fontSize: 14, color: Color(0xFF5C3D00))),
+            ),
+            FilledButton(onPressed: _reingresar, child: const Text('Entrar')),
+          ]),
+        ),
+      );
 
   // Los avisos del servidor quedan a la vista hasta que el evaluador los cierra (con mala señal, un aviso de 3 s se
   // pierde). Cada uno ya nombra la evaluación (centro y folio).

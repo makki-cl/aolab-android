@@ -249,6 +249,7 @@ class AppDatabase {
         if (fila.localRev == a.localRev) a.serverVersion = fila.serverVersion;
         if (a.folio == a.folioLeido) a.folio = fila.folio;
         conservarSubidas(a.document, fila.document);
+        conservarNivelesEnServidor(a.document, fila.document);
         a.localRev = fila.localRev + 1;
         await txn.update('audits', a.toRow(), where: 'id = ?', whereArgs: [a.id]);
       }
@@ -322,6 +323,49 @@ class AppDatabase {
       final a = Audit.fromRow(rows.first);
       if (marcarSubidas(a.document, ids) == 0) return;
       await txn.update('audits', {'document': a.document.encode(), 'dirty': 1}, where: 'id = ?', whereArgs: [auditId]);
+    });
+  }
+
+  /// La posición por nivel de los puntos [ids] ya está en el servidor (volvió aplicado el envío que la llevaba): desde
+  /// ahora se corrige en la web. Sobre la fila recién leída, sin cambiar su revisión ni dejarla pendiente: no hay nada
+  /// nuevo que subir, y el editor abierto lo conserva al guardar (upsertLocal).
+  Future<void> marcarNivelesSubidos(String auditId, Set<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query('audits', where: 'id = ?', whereArgs: [auditId]);
+      if (rows.isEmpty) return;
+      final a = Audit.fromRow(rows.first);
+      if (marcarNivelesEnServidor(a.document, ids) == 0) return;
+      await txn.update('audits', {'document': a.document.encode()}, where: 'id = ?', whereArgs: [auditId]);
+    });
+  }
+
+  // ---- Lo que no ha salido de la tablet y el cambio de usuario ----
+
+  /// Cuántas evaluaciones tienen algo que todavía no está en el servidor: cambios sin subir o una foto o un audio sin
+  /// subir (puede quedar uno aunque el envío haya salido, si la evidencia falló).
+  Future<int> pendientesDeSubir() async {
+    final db = await database;
+    final rows = await db.query('audits');
+    var n = 0;
+    for (final r in rows) {
+      final a = Audit.fromRow(r);
+      if (a.dirty || evidenciasDe(a.document).any((e) => !e.uploaded && !e.isDeleted)) n++;
+    }
+    return n;
+  }
+
+  /// Deja la base como recién instalada para otro usuario: sin evaluaciones, maestros ni cursores. Solo se llama si no hay
+  /// nada pendiente ([pendientesDeSubir] en 0). La plantilla del cuestionario se conserva (es la misma para todos).
+  Future<void> borrarDatosDeUsuario() async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.delete('audits');
+      await txn.delete('clients');
+      await txn.delete('centers');
+      await txn.delete('users');
+      await txn.delete('kv', where: 'key <> ?', whereArgs: ['template']);
     });
   }
 

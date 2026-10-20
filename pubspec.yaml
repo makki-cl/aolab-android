@@ -37,6 +37,10 @@ dependencies:
   # Login con Google (nativo)
   google_sign_in: ^6.2.2
 
+  # Login con Microsoft (Entra, código con PKCE en el navegador del sistema). El retorno msauth:// lo recibe la
+  # actividad de AppAuth: el build agrega appAuthRedirectScheme con tool/configurar_android.sh.
+  flutter_appauth: ^12.1.0
+
   # Cámara / galería para fotos de puntos de control (evidencias)
   image_picker: ^1.1.2
 

@@ -39,7 +39,24 @@ class AuditSyncService extends ChangeNotifier {
   /// terreno—, pero el evaluador tiene que enterarse. Quedan a la vista (y guardados) hasta que los cierra.
   final List<String> avisos = [];
 
-  AuditSyncService({required this.db, required this.api, required this.masters, required this.media});
+  /// La sesión venció (el servidor respondió 401): se avisa a quien maneja la sesión, que pide entrar de nuevo. Nada local
+  /// se borra.
+  final void Function()? alVencerSesion;
+
+  /// ¿La sesión está vencida? Mientras lo esté, no se intenta sincronizar (cada intento volvería con 401).
+  final bool Function()? sesionVencida;
+
+  AuditSyncService({
+    required this.db,
+    required this.api,
+    required this.masters,
+    required this.media,
+    this.alVencerSesion,
+    this.sesionVencida,
+  });
+
+  /// Lo que se le dice al evaluador cuando la sesión venció.
+  static const String kSesionVencida = 'Tu sesión venció: vuelve a entrar para sincronizar. Lo anotado sigue guardado en la tablet.';
 
   /// Recupera los avisos que quedaron sin cerrar la vez anterior.
   Future<void> cargarAvisos() async {
@@ -70,6 +87,11 @@ class AuditSyncService extends ChangeNotifier {
 
   Future<void> sync() async {
     if (status == SyncStatus.syncing) return;
+    if (sesionVencida?.call() ?? false) {
+      lastError = kSesionVencida;
+      _set(SyncStatus.error);
+      return;
+    }
     if (!await _isOnline()) {
       _set(SyncStatus.offline);
       return;
@@ -79,28 +101,28 @@ class AuditSyncService extends ChangeNotifier {
     // siguen — así el PULL siempre trae las evaluaciones del servidor aunque el
     // push/media fallen. Se acumulan los errores para mostrarlos en la UI.
     final errors = <String>[];
+    var vencida = false;
     Future<void> step(String name, Future<void> Function() run) async {
+      if (vencida) return; // con la sesión vencida, cada paso volvería con 401
       try {
         await run();
-      } on DioException catch (e) {
-        final code = e.response?.statusCode;
-        if (code == 401) {
-          errors.add('sesión expirada (401) — cierra sesión y vuelve a entrar');
-        } else if (code == 403) {
-          errors.add('$name: tu cuenta no tiene acceso (403). La app es para el personal de AOLAB.');
-        } else {
-          errors.add('$name: ${code ?? ''} ${e.message ?? e.type.name}'.trim());
-        }
       } catch (e) {
-        errors.add('$name: $e');
+        if (e is DioException && e.response?.statusCode == 401) {
+          vencida = true;
+          errors.add(kSesionVencida);
+          alVencerSesion?.call();
+          return;
+        }
+        final m = mensajeDeSync(name, e);
+        if (!errors.contains(m)) errors.add(m);
       }
     }
 
-    await step('media', _uploadMedia);
-    await step('subir', _push);
-    await step('papelera', _borrarEvidencias);
-    await step('bajar', () => _pull(errors));
-    await step('maestros', masters.pull); // refresca clientes/centros para los selectores
+    await step('Fotos y audios', _uploadMedia);
+    await step('Subir', _push);
+    await step('Papelera', _borrarEvidencias);
+    await step('Bajar', () => _pull(errors));
+    await step('Centros y clientes', masters.pull); // refresca clientes/centros para los selectores
     try {
       await db.setAvisos(avisos);
     } catch (_) {}
@@ -151,6 +173,8 @@ class AuditSyncService extends ChangeNotifier {
         revEnviada: enviada?.localRev ?? -1,
         folioEnviado: enviada?.folio,
       );
+      // La posición por nivel que llevaba ya está en el servidor: desde ahora se corrige en la web.
+      if (enviada != null) await db.marcarNivelesSubidos(enviada.id, puntosConNiveles(enviada.document));
     }
   }
 
@@ -191,8 +215,24 @@ class AuditSyncService extends ChangeNotifier {
       await db.setCursor(cursor);
     }
     if (ilegibles > 0) {
-      errors.add('bajar: $ilegibles evaluación(es) no se pudieron leer con esta versión de la app. Actualízala.');
+      errors.add('Bajar: $ilegibles evaluación(es) no se pudieron leer con esta versión de la app. Actualízala.');
     }
+  }
+
+  /// El error de un paso de la sincronización en palabras del evaluador (sin el texto de la librería de red).
+  static String mensajeDeSync(String paso, Object e) {
+    if (e is DioException) {
+      final code = e.response?.statusCode;
+      if (code == 403) return 'Tu cuenta no tiene acceso a la sincronización: la app es para el personal de AOLAB.';
+      if (code != null) return '$paso: el servidor tuvo un problema ($code).';
+      return switch (e.type) {
+        DioExceptionType.connectionTimeout || DioExceptionType.sendTimeout || DioExceptionType.receiveTimeout =>
+          '$paso: el servidor no respondió a tiempo.',
+        _ => '$paso: no se pudo conectar con el servidor.',
+      };
+    }
+    debugPrint('Sincronización, $paso: $e');
+    return '$paso: algo falló. Prueba de nuevo.';
   }
 
   static Audit? _leer(Map<String, dynamic> d) {

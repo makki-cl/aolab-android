@@ -39,8 +39,11 @@ jobs:
           # generado para que el análisis evalúe solo nuestro código.
           rm -f test/widget_test.dart
 
-      - name: Dependencias
-        run: flutter pub get
+      # «flutter create» puede resolver versiones más nuevas que las del lock: se vuelve al lock y se obliga a usarlo.
+      - name: Dependencias (las del pubspec.lock)
+        run: |
+          git checkout -- pubspec.yaml pubspec.lock
+          flutter pub get --enforce-lockfile
 
       # Gate rápido: falla en ~1 min si hay errores/warnings, en vez de esperar el build completo.
       # (los 'info' de estilo no cortan el build)
@@ -50,17 +53,10 @@ jobs:
       - name: Ícono de la app (AO + badge TEST)
         run: dart run flutter_launcher_icons
 
-      # Canal TEST: applicationId propio (convive con prod), nombre y servidor de test.
-      # Tolera tanto Kotlin DSL (build.gradle.kts) como Groovy (build.gradle).
+      # Canal TEST: applicationId propio (convive con prod), nombre, permisos y el retorno de Microsoft (AppAuth). El
+      # mismo script que usa producción (aolab-android-prod), para que los dos canales compilen igual.
       - name: Config canal TEST
-        run: |
-          sed -i -E 's/applicationId = "[^"]+"/applicationId = "cl.makki.aolab.test"/' android/app/build.gradle.kts 2>/dev/null || true
-          sed -i -E 's/applicationId "[^"]+"/applicationId "cl.makki.aolab.test"/' android/app/build.gradle 2>/dev/null || true
-          sed -i -E 's/android:label="[^"]+"/android:label="Aolab Test"/' android/app/src/main/AndroidManifest.xml || true
-          # Permiso de micrófono para grabar audios de evidencia (además del que aporta el plugin record).
-          grep -q RECORD_AUDIO android/app/src/main/AndroidManifest.xml || \
-            sed -i 's#<application#<uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application#' android/app/src/main/AndroidManifest.xml
-          echo "== applicationId =="; grep -R "applicationId" android/app/build.gradle* || true
+        run: bash tool/configurar_android.sh cl.makki.aolab.test "Aolab Test"
 
       - name: Compilar APK (release, apunta a dev.aolab.cl)
         run: flutter build apk --release --dart-define=AOLAB_API_BASE_URL=https://dev.aolab.cl --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }}
