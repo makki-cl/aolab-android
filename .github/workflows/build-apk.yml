@@ -50,6 +50,10 @@ jobs:
       - name: Analizar código
         run: flutter analyze --no-fatal-infos
 
+      # Las mismas pruebas que verificar.yml y que el build de producción: no se publica un APK que no las pasa.
+      - name: Pruebas
+        run: flutter test
+
       - name: Ícono de la app (AO + badge TEST)
         run: dart run flutter_launcher_icons
 
